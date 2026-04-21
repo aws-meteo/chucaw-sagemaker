@@ -270,3 +270,8 @@ Do not use `AdministratorAccess`. Minimal policy scope should cover:
   - `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on model/artifact and Athena output paths
 - IAM pass role:
   - `iam:PassRole` for configured SageMaker execution role only
+
+
+# Batch Running
+
+aws s3 cp .\batch_smoketest_input.json s3://chucaw-sagemaker-assets-725644097028-us-east-1-an/batch-smoketest/input/input.json --profile sbnai-725 --region us-east-1
