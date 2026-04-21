@@ -7,6 +7,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
+import argparse
 
 
 REQUIRED_RESPONSE_KEYS = {"t2m", "lat_grid", "lon_grid", "units", "source"}
@@ -18,8 +19,12 @@ def required_env(name):
         raise ValueError(f"Missing required environment variable: {name}")
     return value
 
-
 def main():
+    parser = argparse.ArgumentParser(description="Invoke SageMaker endpoint for temperature data")
+    parser.add_argument("--lat", type=float, default=-33.5, help="Latitude (default: -33.5)")
+    parser.add_argument("--lon", type=float, default=-70.6, help="Longitude (default: -70.6)")
+    args = parser.parse_args()
+
     repo_root = Path(__file__).resolve().parents[1]
     load_dotenv(repo_root / ".env")
 
@@ -27,7 +32,7 @@ def main():
     profile = os.getenv("AWS_PROFILE", "").strip()
     endpoint_name = required_env("ENDPOINT_NAME")
 
-    payload = {"lat": -33.5, "lon": -70.6}
+    payload = {"lat": args.lat, "lon": args.lon}
     body = json.dumps(payload)
 
     session_kwargs = {"region_name": region}
