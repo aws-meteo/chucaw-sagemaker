@@ -23,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description="Invoke SageMaker endpoint for temperature data")
     parser.add_argument("--lat", type=float, default=-33.5, help="Latitude (default: -33.5)")
     parser.add_argument("--lon", type=float, default=-70.6, help="Longitude (default: -70.6)")
+    parser.add_argument("--endpoint-name", default="", help="Override ENDPOINT_NAME")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -30,7 +31,7 @@ def main():
 
     region = required_env("REGION")
     profile = os.getenv("AWS_PROFILE", "").strip()
-    endpoint_name = required_env("ENDPOINT_NAME")
+    endpoint_name = args.endpoint_name.strip() or required_env("ENDPOINT_NAME")
 
     payload = {"lat": args.lat, "lon": args.lon}
     body = json.dumps(payload)

@@ -16,6 +16,8 @@ Environment variables:
   SKLEARN_VERSION              required
   MODEL_S3_BUCKET              required
   MODEL_S3_PREFIX              required
+  SERVING_SOURCE_S3_BUCKET     optional unless SAGEMAKER_SUBMIT_DIRECTORY not set
+  SERVING_SOURCE_S3_PREFIX     optional unless SAGEMAKER_SUBMIT_DIRECTORY not set
   MODEL_PACKAGE_GROUP_NAME     required
   MODEL_APPROVAL_STATUS        optional, default Approved
   PROJECT_TAG                  required
@@ -27,8 +29,19 @@ Environment variables:
   MAX_CONCURRENCY              optional, default 5
   SUPPORTED_CONTENT_TYPES      optional, default application/json
   SUPPORTED_RESPONSE_TYPES     optional, default application/json
+
+CLI overrides:
+  --endpoint-name
+  --model-s3-bucket
+  --model-s3-prefix
+  --serving-source-s3-bucket
+  --serving-source-s3-prefix
+  --sagemaker-program
+  --sagemaker-submit-directory
+  --delete-failed-endpoint
 """
 
+import argparse
 import os
 import sys
 import time
@@ -37,7 +50,8 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
-from sagemaker.core import image_uris
+# from sagemaker.core import image_uris
+from sagemaker import image_uris
 
 
 def required_env(name: str) -> str:
@@ -45,6 +59,10 @@ def required_env(name: str) -> str:
     if not value:
         raise ValueError(f"Missing required environment variable: {name}")
     return value
+
+
+def optional_value(cli_value: str, env_name: str, default: str = "") -> str:
+    return (cli_value or os.getenv(env_name, default)).strip()
 
 
 def csv_env(name: str, default: str):
@@ -62,6 +80,61 @@ def exists_endpoint(sm_client, endpoint_name: str) -> bool:
         if code in {"ValidationException", "ResourceNotFound"} and "Could not find endpoint" in message:
             return False
         raise
+
+
+def describe_endpoint_or_none(sm_client, endpoint_name: str):
+    try:
+        return sm_client.describe_endpoint(EndpointName=endpoint_name)
+    except ClientError as exc:
+        message = str(exc).lower()
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in {"ValidationException", "ResourceNotFound"} and (
+            "could not find endpoint" in message or "not found" in message
+        ):
+            return None
+        raise
+
+
+def derive_submit_directory(
+    explicit_submit_directory: str,
+    serving_source_bucket: str,
+    serving_source_prefix: str,
+) -> str:
+    if explicit_submit_directory:
+        return explicit_submit_directory
+    if not serving_source_bucket and not serving_source_prefix:
+        return ""
+    if not serving_source_bucket:
+        raise ValueError(
+            "SERVING_SOURCE_S3_BUCKET is required when SERVING_SOURCE_S3_PREFIX is set"
+        )
+    if not serving_source_prefix:
+        raise ValueError(
+            "SERVING_SOURCE_S3_PREFIX is required when SERVING_SOURCE_S3_BUCKET is set"
+        )
+    normalized_prefix = serving_source_prefix.strip("/")
+    return f"s3://{serving_source_bucket}/{normalized_prefix}/source.tar.gz"
+
+
+def maybe_delete_failed_endpoint(sm_client, endpoint_name: str, delete_failed_endpoint: bool) -> bool:
+    endpoint_description = describe_endpoint_or_none(sm_client, endpoint_name)
+    if endpoint_description is None:
+        return False
+
+    status = endpoint_description.get("EndpointStatus", "Unknown")
+    if status == "Failed":
+        if not delete_failed_endpoint:
+            raise RuntimeError(
+                "Endpoint exists with status Failed. Delete it manually, or rerun with "
+                "--delete-failed-endpoint."
+            )
+        sm_client.delete_endpoint(EndpointName=endpoint_name)
+        waiter = sm_client.get_waiter("endpoint_deleted")
+        waiter.wait(EndpointName=endpoint_name)
+        return False
+
+    return True
+
 
 def is_missing_model_package_group(exc: ClientError) -> bool:
     code = exc.response.get("Error", {}).get("Code", "")
@@ -108,7 +181,41 @@ def wait_for_endpoint(sm_client, endpoint_name: str):
     return description["EndpointStatus"]
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Deploy/update SageMaker serverless sklearn endpoint")
+    parser.add_argument("--endpoint-name", default="", help="Override ENDPOINT_NAME")
+    parser.add_argument("--model-s3-bucket", default="", help="Override MODEL_S3_BUCKET")
+    parser.add_argument("--model-s3-prefix", default="", help="Override MODEL_S3_PREFIX")
+    parser.add_argument(
+        "--serving-source-s3-bucket",
+        default="",
+        help="Override SERVING_SOURCE_S3_BUCKET",
+    )
+    parser.add_argument(
+        "--serving-source-s3-prefix",
+        default="",
+        help="Override SERVING_SOURCE_S3_PREFIX",
+    )
+    parser.add_argument(
+        "--sagemaker-program",
+        default="",
+        help="Override SAGEMAKER_PROGRAM (default/env: inference.py)",
+    )
+    parser.add_argument(
+        "--sagemaker-submit-directory",
+        default="",
+        help="Optional explicit SAGEMAKER_SUBMIT_DIRECTORY, e.g. s3://bucket/prefix/source.tar.gz",
+    )
+    parser.add_argument(
+        "--delete-failed-endpoint",
+        action="store_true",
+        help="If endpoint exists with status Failed, delete it before create/update",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     repo_root = Path(__file__).resolve().parents[1]
     load_dotenv(repo_root / ".env")
     load_dotenv(Path.cwd() / ".env")
@@ -116,10 +223,34 @@ def main():
     region = required_env("REGION")
     profile = os.getenv("AWS_PROFILE", "").strip()
     role_arn = required_env("ROLE_ARN")
-    endpoint_name = required_env("ENDPOINT_NAME")
+    endpoint_name = optional_value(args.endpoint_name, "ENDPOINT_NAME")
+    if not endpoint_name:
+        raise ValueError("Missing required endpoint name: pass --endpoint-name or set ENDPOINT_NAME")
     sklearn_version = required_env("SKLEARN_VERSION")
-    model_bucket = required_env("MODEL_S3_BUCKET")
-    model_prefix = required_env("MODEL_S3_PREFIX").strip("/")
+    model_bucket = optional_value(args.model_s3_bucket, "MODEL_S3_BUCKET")
+    if not model_bucket:
+        raise ValueError("Missing required model bucket: pass --model-s3-bucket or set MODEL_S3_BUCKET")
+    model_prefix = optional_value(args.model_s3_prefix, "MODEL_S3_PREFIX").strip("/")
+    if not model_prefix:
+        raise ValueError("Missing required model prefix: pass --model-s3-prefix or set MODEL_S3_PREFIX")
+    serving_source_bucket = optional_value(
+        args.serving_source_s3_bucket,
+        "SERVING_SOURCE_S3_BUCKET",
+    )
+    serving_source_prefix = optional_value(
+        args.serving_source_s3_prefix,
+        "SERVING_SOURCE_S3_PREFIX",
+    ).strip("/")
+    sagemaker_program = optional_value(args.sagemaker_program, "SAGEMAKER_PROGRAM", "inference.py")
+    explicit_submit_directory = optional_value(
+        args.sagemaker_submit_directory,
+        "SAGEMAKER_SUBMIT_DIRECTORY",
+    )
+    sagemaker_submit_directory = derive_submit_directory(
+        explicit_submit_directory=explicit_submit_directory,
+        serving_source_bucket=serving_source_bucket,
+        serving_source_prefix=serving_source_prefix,
+    )
     model_package_group_name = required_env("MODEL_PACKAGE_GROUP_NAME")
     model_approval_status = os.getenv("MODEL_APPROVAL_STATUS", "Approved").strip()
     model_description = os.getenv("MODEL_DESCRIPTION", "Forecast model deployed from registered model version").strip()
@@ -164,6 +295,10 @@ def main():
         instance_type="ml.m5.large",
     )
 
+    container_environment = {"SAGEMAKER_PROGRAM": sagemaker_program}
+    if sagemaker_submit_directory:
+        container_environment["SAGEMAKER_SUBMIT_DIRECTORY"] = sagemaker_submit_directory
+
     try:
         group_arn = ensure_model_package_group(
             sm_client,
@@ -180,10 +315,7 @@ def main():
                     {
                         "Image": image_uri,
                         "ModelDataUrl": model_data_url,
-                        "Environment": {
-                            "SAGEMAKER_PROGRAM": "inference.py",
-                            "SAGEMAKER_SUBMIT_DIRECTORY": "/opt/ml/model/code",
-                        },
+                        "Environment": container_environment,
                     }
                 ],
                 "SupportedRealtimeInferenceInstanceTypes": ["ml.m5.large"],
@@ -217,7 +349,12 @@ def main():
             Tags=tags,
         )
 
-        if exists_endpoint(sm_client, endpoint_name):
+        endpoint_exists = maybe_delete_failed_endpoint(
+            sm_client,
+            endpoint_name=endpoint_name,
+            delete_failed_endpoint=args.delete_failed_endpoint,
+        )
+        if endpoint_exists and exists_endpoint(sm_client, endpoint_name):
             sm_client.update_endpoint(
                 EndpointName=endpoint_name,
                 EndpointConfigName=endpoint_config_name,
@@ -242,6 +379,8 @@ def main():
     print(f"Model package group: {model_package_group_name}")
     print(f"Model package group ARN: {group_arn}")
     print(f"Registered model version ARN: {model_package_arn}")
+    print(f"Model data URL: {model_data_url}")
+    print(f"Container environment: {container_environment}")
     print(f"Endpoint name: {endpoint_name}")
     print(f"Endpoint action: {action}")
     print(f"Endpoint status: {status}")

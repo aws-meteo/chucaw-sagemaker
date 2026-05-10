@@ -3,6 +3,9 @@ data/*.parquet
 data/*.csv
 model.joblib
 model.tar.gz
+artifacts/
+tmp_model/
+*.tar.gz
 __pycache__/
 .ipynb_checkpoints/
 *.pyc

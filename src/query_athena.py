@@ -16,7 +16,7 @@ import os
 DEFAULT_YEAR = "2026"
 DEFAULT_MONTH = "04"
 DEFAULT_DAY = "09"
-DEFAULT_HOUR = "18"
+DEFAULT_HOUR = "18z"
 EXPECTED_COLUMNS = {"latitude", "longitude", "value"}
 
 
@@ -55,9 +55,21 @@ def parse_s3_uri(s3_uri):
         raise ValueError(f"Invalid S3 URI: {s3_uri}")
     return parsed.netloc, parsed.path.lstrip("/")
 
+def normalize_hour(hour: str) -> str:
+    value = hour.strip().lower()
+    if value in {"00", "06", "12", "18"}:
+        value = f"{value}z"
+    if value not in {"00z", "06z", "12z", "18z"}:
+        raise ValueError(
+            f"Invalid hour partition: {hour}. Expected one of 00z, 06z, 12z, 18z "
+            f"(or 00, 06, 12, 18)."
+        )
+    return value
 
 def main():
     args = parse_args()
+    args.hour = normalize_hour(args.hour)
+
     repo_root = Path(__file__).resolve().parents[1]
     load_dotenv(repo_root / ".env")
 

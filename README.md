@@ -2,6 +2,15 @@
 
 Minimal, testable, failure-oriented SageMaker baseline for ECMWF tabular inference.
 
+Current operational baseline is documented in [docs/team_runbook.md](docs/team_runbook.md):
+
+- serving mode: **separate-source serving bundle**
+- model artifact: `model.tar.gz` with only `model.joblib`
+- serving source artifact: `source.tar.gz` referenced via `SAGEMAKER_SUBMIT_DIRECTORY`
+- validated endpoint history: `chucaw-t2m-trained-knn-attempt-02`
+
+If any command in this README conflicts with `docs/team_runbook.md`, use the runbook as source of truth.
+
 ## 1. Project purpose
 
 This repository establishes operational foundation, not model quality:
@@ -274,4 +283,9 @@ Do not use `AdministratorAccess`. Minimal policy scope should cover:
 
 # Batch Running
 
-aws s3 cp .\batch_smoketest_input.json s3://chucaw-sagemaker-assets-725644097028-us-east-1-an/batch-smoketest/input/input.json --profile sbnai-725 --region us-east-1
+First the baic instructions
+
+aws s3 cp .\data\batch_smoketest_input.json s3://chucaw-sagemaker-assets-725644097028-us-east-1-an/batch-smoketest/input/input.json --profile sbnai-725 --region us-east-1
+
+Then the batch transform to work overe that
+python .\src\run_batch_transform_smoketest.py

@@ -11,7 +11,7 @@ $tarPath = Join-Path $repoRoot "model.tar.gz"
 function Require-Path {
     param([string]$PathValue, [string]$Label)
     if (-not (Test-Path $PathValue)) {
-        throw "Missing required $Label: $PathValue"
+        throw "Missing required ${Label}: $PathValue"
     }
 }
 
