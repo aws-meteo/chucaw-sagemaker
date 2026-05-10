@@ -1,0 +1,2 @@
+# Baseline training uses packages already present in the SageMaker scikit-learn container.
+# Keep this file so future third-party additions are explicit and reviewable.
