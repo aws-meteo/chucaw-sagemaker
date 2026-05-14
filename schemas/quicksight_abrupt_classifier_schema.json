@@ -1,0 +1,39 @@
+{
+  "inputContentType": "CSV",
+  "outputContentType": "CSV",
+  "input": [
+    {
+      "name": "lat",
+      "type": "DECIMAL",
+      "nullable": false
+    },
+    {
+      "name": "lon",
+      "type": "DECIMAL",
+      "nullable": false
+    },
+    {
+      "name": "t2m",
+      "type": "DECIMAL",
+      "nullable": false
+    }
+  ],
+  "output": [
+    {
+      "name": "abrupt_temp_change_label",
+      "type": "INTEGER"
+    },
+    {
+      "name": "abrupt_temp_change_score",
+      "type": "DECIMAL"
+    }
+  ],
+  "description": "Prototype CSV classification model for QuickSight. Inputs are lat, lon, t2m. Output label is 1 when the row is classified as abrupt temperature change, else 0.",
+  "version": "1.0",
+  "instanceCount": 1,
+  "instanceTypes": [
+    "ml.m5.large",
+    "ml.m5.xlarge"
+  ],
+  "defaultInstanceType": "ml.m5.large"
+}
