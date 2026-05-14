@@ -154,6 +154,12 @@ ENDPOINT_NAME=chucaw-t2m-trained-knn
 SAGEMAKER_PROGRAM=inference.py
 ```
 
+## G) QuickSight pipeline
+
+For batch inference aligned with Athena and QuickSight, use the local batch inference pipeline. This bypasses the real-time endpoint for cost-effective dashboard updates.
+
+See [docs/pipeline_quicksight_integration.md](pipeline_quicksight_integration.md) for details.
+
 ## Common failure modes
 
 1. `FileNotFoundError: /opt/ml/model/code`
