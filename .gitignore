@@ -9,3 +9,5 @@ tmp_model/
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
+/.tmp
+/.vscode

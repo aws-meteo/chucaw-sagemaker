@@ -281,11 +281,38 @@ Do not use `AdministratorAccess`. Minimal policy scope should cover:
   - `iam:PassRole` for configured SageMaker execution role only
 
 
-# Batch Running
+## 16. Batch inference modes
 
-First the baic instructions
+There are two ways to run batch inference in this repository:
 
-aws s3 cp .\data\batch_smoketest_input.json s3://chucaw-sagemaker-assets-725644097028-us-east-1-an/batch-smoketest/input/input.json --profile sbnai-725 --region us-east-1
+### A) QuickSight-aligned local batch (Parquet)
+This is the recommended path for generating dashboard-ready data. It runs locally, uses the canonical prediction schema, and outputs Parquet files suitable for S3/Athena/QuickSight.
 
-Then the batch transform to work overe that
-python .\src\run_batch_transform_smoketest.py
+```bash
+python scripts/run_batch_inference_local.py \
+  --input data/20260409180000-6h-scda-fc.parquet \
+  --output artifacts/predictions_local.parquet \
+  --source-year 2026 --source-month 04 --source-day 09 --source-hour 18
+```
+
+For detailed pipeline setup (Athena DDL, QuickSight datasets), see [docs/pipeline_quicksight_integration.md](docs/pipeline_quicksight_integration.md).
+
+### B) SageMaker Batch Transform smoke test (JSON)
+This is used to validate the `model.tar.gz` and `inference.py` contract inside a managed SageMaker environment. It uses the legacy JSON response format.
+
+1. Upload test input to S3:
+```bash
+aws s3 cp data/batch_smoketest_input.json s3://<your-bucket>/batch-smoketest/input/input.json
+```
+
+2. Run transform job:
+```bash
+python src/run_batch_transform_smoketest.py
+```
+
+## 17. QuickSight integration
+
+The project now supports a local-to-cloud downscaling pipeline:
+- **Local:** `scripts/run_batch_inference_local.py`
+- **Athena DDL:** `sql/create_quicksight_predictions_table.sql`
+- **Runbook:** [docs/reports/aws_quicksight_validation_next_steps.md](docs/reports/aws_quicksight_validation_next_steps.md)
