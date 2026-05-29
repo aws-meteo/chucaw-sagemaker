@@ -1,0 +1,9 @@
+{
+  "BudgetName": "sbnai-account-monthly-guardrail",
+  "BudgetLimit": {
+    "Amount": "30",
+    "Unit": "USD"
+  },
+  "TimeUnit": "MONTHLY",
+  "BudgetType": "COST"
+}

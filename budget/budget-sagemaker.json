@@ -1,0 +1,27 @@
+{
+  "BudgetName": "sbnai-sagemaker-monthly-guardrail",
+  "BudgetLimit": {
+    "Amount": "10",
+    "Unit": "USD"
+  },
+  "CostFilters": {
+    "Service": [
+      "Amazon SageMaker"
+    ]
+  },
+  "CostTypes": {
+    "IncludeTax": true,
+    "IncludeSubscription": true,
+    "UseBlended": false,
+    "IncludeRefund": true,
+    "IncludeCredit": true,
+    "IncludeUpfront": true,
+    "IncludeRecurring": true,
+    "IncludeOtherSubscription": true,
+    "IncludeSupport": true,
+    "IncludeDiscount": true,
+    "UseAmortized": false
+  },
+  "TimeUnit": "MONTHLY",
+  "BudgetType": "COST"
+}
