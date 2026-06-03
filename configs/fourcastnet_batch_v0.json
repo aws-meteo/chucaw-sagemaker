@@ -1,0 +1,20 @@
+{
+  "profile": "sbnai-725",
+  "region": "us-east-1",
+  "model_name": "sbnai-fourcastnet-fcn-v0-2026-05-27-19-10-45-401",
+  "default_transform_instance_type": "ml.g4dn.xlarge",
+  "default_transform_instance_count": 1,
+  "input_s3_uri_placeholder": "s3://PLACEHOLDER-BUCKET/input/fourcastnet_payloads.jsonl",
+  "output_s3_uri_placeholder": "s3://PLACEHOLDER-BUCKET/output/fourcastnet_results/",
+  "content_type": "application/jsonlines",
+  "accept": "application/jsonlines",
+  "tags": {
+    "Project": "SbnAI",
+    "Component": "FourCastNet",
+    "CostMode": "batch-only",
+    "Owner": "Fabian",
+    "Environment": "dev",
+    "Lifecycle": "finished"
+  },
+  "notes": "FourCastNet inputs are ~1 GB which makes real-time endpoints slow and expensive. This config ensures Batch Transform is the only route used. Provide JSONL input where each line is a pointer to the 1GB tensor in S3 or passes partial subsets."
+}
