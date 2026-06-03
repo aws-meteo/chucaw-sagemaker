@@ -1,20 +1,22 @@
 # Team Runbook
 
+REALTIME_ENDPOINT_COST_RISK
+
 ## Executive summary
 
-Operational baseline is now **separate-source serving bundle**.
+Operational baseline is now **Batch Transform only** for SageMaker-hosted FourCastNet inference.
 
-Attempt 02 was the validated proof point and successfully created/invoked endpoint:
+Historical endpoint attempt retained for context only:
 
 - `chucaw-t2m-trained-knn-attempt-02`
 
-Clear statement: **Attempt 02 succeeded because source code is uploaded separately and referenced through `SAGEMAKER_SUBMIT_DIRECTORY` as an S3 tarball.**
+Clear statement: **endpoint hosting is no longer the default path. Endpoint deploy/invoke helpers in default paths intentionally fail.**
 
 ## Final architecture
 
-Athena/local data -> training dataset -> SageMaker Training Job -> training model artifact -> serving source bundle -> deploy endpoint -> invoke endpoint.
+Athena/local data -> model artifact -> SageMaker Model -> Batch Transform job.
 
-Two S3 artifacts are required for deploy:
+Two S3 artifacts may be required for model packaging:
 
 1. model data artifact (`model.tar.gz`) from `MODEL_S3_BUCKET/MODEL_S3_PREFIX`
 2. source code artifact (`source.tar.gz`) from `SERVING_SOURCE_S3_BUCKET/SERVING_SOURCE_S3_PREFIX`
@@ -41,7 +43,6 @@ MODEL_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/current/model
 SERVING_SOURCE_S3_BUCKET=chucaw-data-platinum-processed-725644097028-us-east-1-an
 SERVING_SOURCE_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/current/source
 
-ENDPOINT_NAME=chucaw-t2m-trained-knn
 SAGEMAKER_PROGRAM=inference.py
 SKLEARN_VERSION=1.2-1
 
@@ -103,34 +104,29 @@ tar -tzf artifacts/build/source.tar.gz
 python src/smoke_test_local.py --artifact-local artifacts/build/model.tar.gz --source-artifact-local artifacts/build/source.tar.gz
 ```
 
-### D) Deploy
+### D) Batch Transform dry-run
+
+```bash
+python scripts/check_no_sagemaker_always_on_compute.py
+python scripts/run_fourcastnet_batch_transform.py --input-s3-uri s3://<bucket>/<input-prefix>/ --output-s3-uri s3://<bucket>/<output-prefix>/ --model-name <model-name>
+```
+
+Expected outputs:
+
+- preflight result showing no always-on SageMaker compute risk
+- planned Batch Transform payload
+- dry-run confirmation unless `--execute` is explicitly supplied
+
+### E) Endpoint commands intentionally fail
 
 ```bash
 python src/deploy_endpoint.py
 ```
 
-Expected outputs:
-
-- model package ARN
-- model data URL
-- container environment including `SAGEMAKER_PROGRAM=inference.py`
-- container environment with `SAGEMAKER_SUBMIT_DIRECTORY=s3://.../source.tar.gz`
-- endpoint status `InService`
-
-### E) Invoke
-
-```bash
-python src/invoke_endpoint.py --lat -33.5 --lon -70.6
-```
-
 Expected output:
 
-- JSON response with unchanged contract keys:
-  - `t2m`
-  - `lat_grid`
-  - `lon_grid`
-  - `units`
-  - `source`
+- an error saying real-time endpoints are disabled for FourCastNet by default
+- no invoke script exists for the default FourCastNet path
 
 ## Already-validated attempt-02 environment
 
@@ -139,7 +135,6 @@ MODEL_S3_BUCKET=chucaw-data-platinum-processed-725644097028-us-east-1-an
 MODEL_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/attempt-02
 SERVING_SOURCE_S3_BUCKET=chucaw-data-platinum-processed-725644097028-us-east-1-an
 SERVING_SOURCE_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/attempt-02/source
-ENDPOINT_NAME=chucaw-t2m-trained-knn-attempt-02
 SAGEMAKER_PROGRAM=inference.py
 ```
 
@@ -150,7 +145,6 @@ MODEL_S3_BUCKET=chucaw-data-platinum-processed-725644097028-us-east-1-an
 MODEL_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/current/model
 SERVING_SOURCE_S3_BUCKET=chucaw-data-platinum-processed-725644097028-us-east-1-an
 SERVING_SOURCE_S3_PREFIX=sagemaker/chucaw-t2m-trained-knn/current/source
-ENDPOINT_NAME=chucaw-t2m-trained-knn
 SAGEMAKER_PROGRAM=inference.py
 ```
 
@@ -166,10 +160,10 @@ See [docs/pipeline_quicksight_integration.md](pipeline_quicksight_integration.md
    - cause: old single-artifact pattern or wrong submit directory
    - fix: use separate-source bundle and set `SERVING_SOURCE_*` (or explicit `SAGEMAKER_SUBMIT_DIRECTORY` to `source.tar.gz`)
 
-2. Endpoint exists in `Failed`
-   - fix: delete manually, or use:
-   - `python src/deploy_endpoint.py --delete-failed-endpoint`
-   - deletion is opt-in and not default
+2. Endpoint exists or Studio app is running
+   - fix: run `python scripts/check_no_sagemaker_always_on_compute.py`
+   - generate dry-run cleanup commands with `python scripts/generate_sagemaker_cleanup_commands.py`
+   - deletion requires running `.\generated_cleanup_sagemaker.ps1 -Execute`
 
 3. Training artifact invalid
    - cause: missing `model.joblib` in training output

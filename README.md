@@ -1,13 +1,14 @@
 # chucaw-sagemaker
 
+REALTIME_ENDPOINT_COST_RISK
+
 Minimal, testable, failure-oriented SageMaker baseline for ECMWF tabular inference.
 
-Current operational baseline is documented in [docs/team_runbook.md](docs/team_runbook.md):
+Current SageMaker cost-safety policy is documented in [docs/sagemaker_cost_safety.md](docs/sagemaker_cost_safety.md):
 
-- serving mode: **separate-source serving bundle**
-- model artifact: `model.tar.gz` with only `model.joblib`
-- serving source artifact: `source.tar.gz` referenced via `SAGEMAKER_SUBMIT_DIRECTORY`
-- validated endpoint history: `chucaw-t2m-trained-knn-attempt-02`
+- FourCastNet default mode: **CreateModel + Batch Transform only**
+- forbidden default mode: real-time endpoint, async endpoint, Studio app, notebook instance, or any always-on hosting
+- endpoint deployment and invocation scripts in default paths intentionally fail
 
 If any command in this README conflicts with `docs/team_runbook.md`, use the runbook as source of truth.
 
@@ -18,7 +19,7 @@ This repository establishes operational foundation, not model quality:
 - local-first data extraction and inference workflow
 - Athena extraction-only workflow for reproducible snapshot materialization
 - deterministic trivial model artifact
-- SageMaker Serverless Inference deployment path
+- SageMaker Batch Transform deployment path
 - strict data and response contracts
 - explicit failure points and diagnostics
 
@@ -33,20 +34,20 @@ This repository establishes operational foundation, not model quality:
 - `src/pack_model.sh` packages `model.tar.gz` with required SageMaker structure.
 - local artifact serialization intentionally aligned with SageMaker scikit-learn container family (`scikit-learn 1.2.2` local, `framework_version=1.2-1` in SageMaker) to reduce deserialization risk.
 
-3. Deployment and serving:
+3. Batch serving:
 - `src/upload_to_s3.py` uploads `model.tar.gz`.
-- `src/deploy_endpoint.py` deploys/updates SageMaker **Serverless Inference** endpoint.
-- `src/invoke_endpoint.py` validates online inference contract.
+- `scripts/run_fourcastnet_batch_transform.py` prepares a dry-run Batch Transform payload by default.
+- `src/deploy_endpoint.py` intentionally fails because endpoint hosting is not a default path.
 
 4. Local inference parity:
 - `src/smoke_test_local.py` executes `inference/inference.py` functions end-to-end without SageMaker.
 
-## 3. Why serverless inference was selected
+## 3. Why Batch Transform is the default
 
-Serverless inference is preferred for this MVP baseline because traffic is low/variable and the objective is deployment clarity with minimal always-on cost.
+Batch Transform is required for FourCastNet because the model input is approximately 1 GB and the previous endpoint incident showed real idle cost risk.
 
-- no always-on instance management
-- simpler first production path for deterministic lookup baseline
+- no always-on endpoint instance
+- explicit job lifecycle
 - explicit fail-fast behavior around packaging, permissions, endpoint state, and invocation
 
 ## 4. Source data contract (`silverlayer.forecast_parquet`)
@@ -165,20 +166,24 @@ model.tar.gz
     └── requirements.txt
 ```
 
-## 10. Exact deploy commands
+## 10. Exact Batch Transform dry-run command
 
 ```bash
-python src/upload_to_s3.py
+python scripts/check_no_sagemaker_always_on_compute.py
+python scripts/run_fourcastnet_batch_transform.py --input-s3-uri s3://<bucket>/<input-prefix>/ --output-s3-uri s3://<bucket>/<output-prefix>/ --model-name <model-name>
+```
+
+`scripts/run_fourcastnet_batch_transform.py` is dry-run by default. It must not create an AWS job unless `--execute` is supplied after preflight review.
+
+## 11. Endpoint commands are disabled
+
+```bash
 python src/deploy_endpoint.py
 ```
 
-## 11. Exact invoke command
+There is no FourCastNet invoke script in the default path. Batch Transform writes results to the output S3 prefix instead.
 
-```bash
-python src/invoke_endpoint.py
-```
-
-Request contract:
+Batch request contract:
 
 ```json
 {"lat": -33.5, "lon": -70.6}
@@ -198,20 +203,20 @@ Response contract:
 
 ## 12. Cleanup guidance
 
-Delete endpoint resources when finished:
+Generate local cleanup commands only; dry-run is the default:
 
 ```bash
-aws sagemaker delete-endpoint --endpoint-name chucaw-t2m-trivial --region us-east-1
+python scripts/generate_sagemaker_cleanup_commands.py
+.\generated_cleanup_sagemaker.ps1
 ```
 
-Delete old endpoint configs/models created by this repo (names prefixed with endpoint name):
+Actual endpoint/config/app deletion requires:
 
-```bash
-aws sagemaker list-endpoint-configs --name-contains chucaw-t2m-trivial --region us-east-1
-aws sagemaker delete-endpoint-config --endpoint-config-name <name> --region us-east-1
-aws sagemaker list-models --name-contains chucaw-t2m-trivial --region us-east-1
-aws sagemaker delete-model --model-name <name> --region us-east-1
+```powershell
+.\generated_cleanup_sagemaker.ps1 -Execute
 ```
+
+Do not delete SageMaker Models, S3 artifacts, ECR images, CloudWatch logs, domains, user profiles, or spaces from automated cleanup.
 
 ## 13. Failure troubleshooting
 
@@ -220,14 +225,14 @@ Explicit failure classes and where they surface:
 - local parquet path missing: `src/load_local.py`
 - missing required columns: `src/load_local.py`, `src/train.py`, `src/query_athena.py`
 - empty filtered dataset: `src/load_local.py`, `src/query_athena.py`
-- `.env` missing required variables: `src/query_athena.py`, `src/upload_to_s3.py`, `src/deploy_endpoint.py`, `src/invoke_endpoint.py`
+- `.env` missing required variables: `src/query_athena.py`, `src/upload_to_s3.py`
 - Athena query failed: `src/query_athena.py`
 - Athena query returned zero rows: `src/query_athena.py`
 - `model.joblib` missing: `src/pack_model.sh`, `src/smoke_test_local.py`, `inference/model_fn`
 - `model.tar.gz` malformed: `src/pack_model.sh`
 - S3 upload failure: `src/upload_to_s3.py`
-- SageMaker deployment failure: `src/deploy_endpoint.py`
-- endpoint invocation failure: `src/invoke_endpoint.py`
+- SageMaker endpoint deployment requested: default scripts refuse and point to Batch Transform
+- endpoint invocation is not available in the default FourCastNet path
 - malformed request JSON / unsupported content type: `inference/input_fn`
 
 ## 14. Known limitations
@@ -240,10 +245,10 @@ Explicit failure classes and where they surface:
 
 ## 15. Architectural decisions and explicit deviations
 
-- **Serverless selected over always-on endpoint:** baseline traffic profile and MVP objective favor serverless simplicity/cost posture.
+- **Batch Transform selected over endpoint hosting:** FourCastNet input size and the May 2026 cost incident make real-time hosting the wrong default.
 - **Athena extraction-only:** inference does not depend on Athena runtime; Athena used only to materialize deterministic snapshot.
 - **Trivial lookup artifact over real ML:** intentional failure-transparent baseline; isolates data/packaging/deploy/invoke path before modeling complexity.
-- **Explicit deviation:** deployment uses low-level SageMaker API calls (`create_model`, `create_endpoint_config`, `create_endpoint`) instead of high-level estimator deploy helper. Reason: clearer serverless config, explicit resource tags, explicit container environment wiring, and clearer failure diagnostics.
+- **Explicit deviation (experimental):** real-time deployment exists only under `experimental/realtime_endpoint_dangerous/` and is not the default workflow.
 
 ## Inference implementation notes
 
@@ -265,11 +270,8 @@ Do not use `AdministratorAccess`. Minimal policy scope should cover:
 
 - SageMaker:
   - `sagemaker:CreateModel`
-  - `sagemaker:CreateEndpointConfig`
-  - `sagemaker:CreateEndpoint`
-  - `sagemaker:UpdateEndpoint`
-  - `sagemaker:DescribeEndpoint`
-  - `sagemaker:InvokeEndpoint`
+  - `sagemaker:CreateTransformJob`
+  - `sagemaker:DescribeTransformJob`
   - `sagemaker:List*` / `sagemaker:Delete*` for cleanup (optional but practical)
 - Athena:
   - `athena:StartQueryExecution`

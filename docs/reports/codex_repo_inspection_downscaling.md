@@ -12,7 +12,7 @@ Goal inspected: generic, pipeline-friendly inference output for Athena/QuickSigh
 - `training/train.py` - SageMaker training job script (`KNeighborsRegressor`)
 - `src/load_local.py` - local parquet extraction (`variable='t'`, `isobaricInhPa=1000.0`)
 - `src/query_athena.py` - Athena extraction with partition predicates
-- `src/deploy_endpoint.py`, `src/upload_to_s3.py`, `src/invoke_endpoint.py` - deploy/invoke flow
+- `src/deploy_endpoint.py`, `src/upload_to_s3.py` - batch-only deployment flow
 - `src/pack_model.sh` / `src/pack_model.ps1` - model packaging
 - `src/smoke_test_local.py` - local handler smoke test
 
@@ -30,7 +30,7 @@ Goal inspected: generic, pipeline-friendly inference output for Athena/QuickSigh
 - Package: `src/pack_model.sh` or `src/pack_model.ps1`
 - Local smoke: `python src/smoke_test_local.py`
 - Deploy: `python src/upload_to_s3.py` then `python src/deploy_endpoint.py`
-- Online invoke: `python src/invoke_endpoint.py`
+- Batch outputs are consumed from S3; there is no default `invoke_endpoint` path for FourCastNet
 
 ## Current assumptions
 
