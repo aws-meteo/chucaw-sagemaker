@@ -1,6 +1,7 @@
 .env
 data/*.parquet
 data/*.csv
+data/**/*.csv
 model.joblib
 model.tar.gz
 artifacts/
@@ -11,4 +12,6 @@ __pycache__/
 *.pyc
 /.tmp
 /.vscode
+.graphify_*.json
+fcn_debug/
 graphify-out/*
