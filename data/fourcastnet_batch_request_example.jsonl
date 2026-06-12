@@ -1,0 +1,1 @@
+{"input_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v0/input/input_tensor.npy", "output_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v0/batch-output/run-example/", "mode": "metadata_only"}

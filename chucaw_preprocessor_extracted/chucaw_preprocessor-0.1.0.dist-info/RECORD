@@ -1,0 +1,9 @@
+chucaw_preprocessor/__init__.py,sha256=Om--B8ZpKL2JB0Y4WnXTCs-Zim98hQfnyzrBX-VMHd8,531
+chucaw_preprocessor/ecmwf.py,sha256=fH44Hi0NISgwL3r2JMaDT6KUIB8yLGC16n88LpKSjTI,12324
+chucaw_preprocessor/fourcastnet.py,sha256=lUijaZ8fyWPfxBpo8nrvLfFCSm9eC2mGQQEu7-_V3WU,15291
+chucaw_preprocessor/glue_args.py,sha256=8k_P_NvINTkFXIQVw_lnnPgPO1KdZRDeDyDwj-sG_xs,1909
+chucaw_preprocessor/job_common.py,sha256=YosBIbZnwn2aw064I8myD39JrTzNweoDm1ZaxrF-Kjg,636
+chucaw_preprocessor-0.1.0.dist-info/METADATA,sha256=WLy1scvjPHe65HPVP13Fpnkm3DRDwXT6THn90sJwX4o,8708
+chucaw_preprocessor-0.1.0.dist-info/WHEEL,sha256=aeYiig01lYGDzBgS8HxWXOg3uV61G9ijOsup-k9o1sk,91
+chucaw_preprocessor-0.1.0.dist-info/top_level.txt,sha256=sofOWoqzRtgYJomsZiJO_Ibf8Da5Nu9W-Nebl4PmmY4,20
+chucaw_preprocessor-0.1.0.dist-info/RECORD,,

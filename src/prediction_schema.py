@@ -39,6 +39,21 @@ PARTITION_COLUMNS = [
 
 
 def _prediction_id(parts: Iterable[Any]) -> str:
+    """
+    Genera un identificador único determinista para una predicción.
+
+    Combina las partes proporcionadas en una cadena y calcula su hash SHA-256.
+
+    Parameters
+    ----------
+    parts : Iterable[Any]
+        Elementos que componen la identidad única de la predicción.
+
+    Returns
+    -------
+    str
+        Hash SHA-256 en formato hexadecimal.
+    """
     material = "|".join(str(part) for part in parts)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -59,6 +74,51 @@ def build_prediction_frame(
     source_day: str,
     source_hour: str,
 ) -> pd.DataFrame:
+    """
+    Construye un dataframe de predicciones siguiendo el esquema estandarizado de SbnAI.
+
+    Enriquece los resultados con metadatos de auditoría (timestamp, ID único,
+    snapshot de características) y columnas de partición para Athena.
+
+    Parameters
+    ----------
+    source_df : pd.DataFrame
+        Dataframe con las características de entrada.
+    predicted_values : List[float]
+        Lista de valores predichos correspondientes a cada fila de source_df.
+    model_name : str
+        Nombre del modelo utilizado.
+    model_version : str
+        Versión del modelo.
+    method : str
+        Método de predicción.
+    target_variable : str
+        Variable objetivo (ej. 't').
+    predicted_units : str
+        Unidades del valor predicho (ej. 'K').
+    source_database : str
+        Base de datos de origen de las características.
+    source_table : str
+        Tabla de origen.
+    source_year : str
+        Año de los datos de origen.
+    source_month : str
+        Mes.
+    source_day : str
+        Día.
+    source_hour : str
+        Hora.
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe estructurado y validado listo para su exportación.
+
+    Raises
+    ------
+    ValueError
+        Si la longitud de los valores predichos no coincide con el dataframe de origen.
+    """
     if len(source_df) != len(predicted_values):
         raise ValueError("Length mismatch source_df vs predicted_values")
 

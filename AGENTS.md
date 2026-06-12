@@ -62,9 +62,22 @@ Both LOCAL and ATHENA flows must converge to columns:
 - `value`
 
 ## SageMaker architecture
-Prefer SageMaker Serverless Inference for this MVP.
+Prefer SageMaker Batch Transform for FourCastNet.
 Athena is extraction-only, never part of online inference.
 The baseline model is deterministic nearest-grid lookup, not real ML.
+
+## SageMaker cost safety policy (strict)
+- Agents must not create real-time endpoints unless the user explicitly requests it in the same session.
+- Agents must prefer Batch Transform for FourCastNet.
+- Agents must run `scripts/check_no_sagemaker_always_on_compute.py` before any AWS write operation.
+- Agents must show expected cost mode before creating resources.
+- Agents must tag created resources with:
+  - `Project=SbnAI`
+  - `Component=FourCastNet`
+  - `CostMode=batch-only`
+  - `Owner=Fabian`
+  - `Environment=dev`
+- Agents must refuse to use `.deploy()` for FourCastNet unless the user explicitly accepts real-time endpoint cost risk.
 
 ## Task not done until
 A task is not complete until the relevant acceptance commands have run successfully.

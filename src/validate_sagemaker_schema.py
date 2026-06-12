@@ -19,10 +19,20 @@ VALID_INSTANCE_TYPES = {
 
 def validate_schema(schema_path: str) -> Tuple[bool, List[str]]:
     """
-    Valida un schema de SageMaker para QuickSight.
-    
-    Returns:
-        (is_valid, list_of_errors)
+    Valida un archivo de esquema (JSON) de SageMaker para su integración con QuickSight.
+
+    Verifica la presencia de campos obligatorios, la validez de los tipos de datos,
+    el formato de contenido y las políticas de instancias según la documentación de AWS.
+
+    Parameters
+    ----------
+    schema_path : str
+        Ruta al archivo JSON del esquema.
+
+    Returns
+    -------
+    Tuple[bool, List[str]]
+        Una tupla (is_valid, list_of_errors). Si no hay errores, is_valid es True.
     """
     errors = []
     
@@ -103,7 +113,23 @@ def validate_schema(schema_path: str) -> Tuple[bool, List[str]]:
 
 
 def validate_column(field: Dict, index: int, section: str) -> List[str]:
-    """Valida una columna individual en input o output."""
+    """
+    Valida la definición de una columna individual dentro de las secciones input u output.
+
+    Parameters
+    ----------
+    field : Dict
+        Objeto que define la columna (name, type, etc.).
+    index : int
+        Índice de la columna en la lista para facilitar la identificación del error.
+    section : str
+        Nombre de la sección ("input" o "output").
+
+    Returns
+    -------
+    List[str]
+        Lista de errores encontrados para esta columna.
+    """
     errors = []
     
     if not isinstance(field, dict):

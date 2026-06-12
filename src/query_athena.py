@@ -21,6 +21,14 @@ EXPECTED_COLUMNS = {"latitude", "longitude", "value"}
 
 
 def parse_args():
+    """
+    Analiza los argumentos de la línea de comandos para la consulta Athena.
+
+    Returns
+    -------
+    argparse.Namespace
+        Argumentos con año, mes, día y hora de la partición.
+    """
     parser = argparse.ArgumentParser(description="Query Athena and materialize t2m snapshot CSV")
     parser.add_argument("--year", default=DEFAULT_YEAR, help="Partition year (default: 2026)")
     parser.add_argument("--month", default=DEFAULT_MONTH, help="Partition month (default: 04)")
@@ -30,6 +38,24 @@ def parse_args():
 
 
 def required_env(name):
+    """
+    Obtiene una variable de entorno obligatoria.
+
+    Parameters
+    ----------
+    name : str
+        Nombre de la variable.
+
+    Returns
+    -------
+    str
+        Valor de la variable.
+
+    Raises
+    ------
+    ValueError
+        Si la variable no está definida.
+    """
     value = os.getenv(name, "").strip()
     if not value:
         raise ValueError(f"Missing required environment variable: {name}")
@@ -37,6 +63,29 @@ def required_env(name):
 
 
 def build_query(database, table, year, month, day, hour):
+    """
+    Construye la consulta SQL para Athena.
+
+    Parameters
+    ----------
+    database : str
+        Nombre de la base de datos en Glue/Athena.
+    table : str
+        Nombre de la tabla.
+    year : str
+        Año de partición.
+    month : str
+        Mes.
+    day : str
+        Día.
+    hour : str
+        Hora.
+
+    Returns
+    -------
+    str
+        Consulta SQL formateada.
+    """
     return f"""
 SELECT latitude, longitude, value
 FROM {database}.{table}
@@ -50,12 +99,43 @@ WHERE variable      = 't'
 
 
 def parse_s3_uri(s3_uri):
+    """
+    Analiza una URI de S3.
+
+    Parameters
+    ----------
+    s3_uri : str
+        URI s3://bucket/key.
+
+    Returns
+    -------
+    tuple[str, str]
+        (bucket, key).
+    """
     parsed = urlparse(s3_uri)
     if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
         raise ValueError(f"Invalid S3 URI: {s3_uri}")
     return parsed.netloc, parsed.path.lstrip("/")
 
 def normalize_hour(hour: str) -> str:
+    """
+    Normaliza el formato de la hora para la partición de Athena (ej. "18" -> "18z").
+
+    Parameters
+    ----------
+    hour : str
+        Hora de entrada.
+
+    Returns
+    -------
+    str
+        Hora normalizada con sufijo 'z'.
+
+    Raises
+    ------
+    ValueError
+        Si la hora no es válida (debe ser 00, 06, 12 o 18).
+    """
     value = hour.strip().lower()
     if value in {"00", "06", "12", "18"}:
         value = f"{value}z"
@@ -67,6 +147,12 @@ def normalize_hour(hour: str) -> str:
     return value
 
 def main():
+    """
+    Punto de entrada principal para la extracción de datos desde Athena.
+
+    Ejecuta la consulta, espera a que finalice, descarga los resultados de S3
+    y materializa un archivo CSV local con el snapshot de temperatura.
+    """
     args = parse_args()
     args.hour = normalize_hour(args.hour)
 

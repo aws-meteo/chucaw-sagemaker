@@ -1,0 +1,10 @@
+{
+  "dataset_name": "2026-04-09-18",
+  "row_count": 5191200,
+  "columns": [
+    "latitude",
+    "longitude",
+    "value"
+  ],
+  "source_csv": "data\\t2m_snapshot.csv"
+}
