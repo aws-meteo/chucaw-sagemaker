@@ -1,0 +1,22 @@
+{
+  "profile": "sbnai-725",
+  "region": "us-east-1",
+  "model_name": "sbnai-fourcastnet-fcn-v1-cpu-poc",
+  "default_transform_instance_type": "ml.m5.large",
+  "default_transform_instance_count": 1,
+  "input_s3_uri_placeholder": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy",
+  "output_s3_uri_placeholder": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/",
+  "content_type": "application/x-npy",
+  "accept": "application/json",
+  "tags": {
+    "Project": "SbnAI-Chucaw",
+    "Component": "FourCastNet",
+    "CostMode": "batch-only",
+    "Owner": "Fabian",
+    "Environment": "dev",
+    "Purpose": "fourcastnet-cpu-batch-transform-poc",
+    "NoEndpoint": "true",
+    "Lifecycle": "finished"
+  },
+  "notes": "CPU-only POC config. The account has ZERO GPU transform quota (ml.g4dn/g5/p3/inf2/trn1 = 0) but CPU quota exists (ml.m5.large = 8). This config targets a CPU SageMaker Model (sbnai-fourcastnet-fcn-v1-cpu-poc) that reuses the GPU model's model.tar.gz with a CPU PyTorch image. It is only valid if code/inference.py inside the artifact is CPU-safe (no hardcoded CUDA). Verify with scripts/inspect_and_patch_fourcastnet_inference.py before use. NOTE: content_type application/x-npy with SplitType=None feeds the whole .npy as one payload; docs/fourcastnet_batch_transform.md considers the JSONL S3-pointer manifest the canonical path. Confirm input_fn accepts x-npy."
+}
