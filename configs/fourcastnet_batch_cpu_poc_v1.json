@@ -1,0 +1,53 @@
+{
+  "model_name": "sbnai-fourcastnet-fcn-v1-cpu-poc",
+  "source_model_name": "sbnai-fourcastnet-fcn-v1",
+  "model_data_url": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/model/model.tar.gz",
+  "image_uri": "763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-inference:2.1.0-cpu-py310",
+  "execution_role_arn": "arn:aws:iam::725644097028:role/service-role/AmazonSageMakerAdminIAMExecutionRole",
+  "container_environment": {
+    "SAGEMAKER_PROGRAM": "inference.py",
+    "SAGEMAKER_SUBMIT_DIRECTORY": "/opt/ml/model/code"
+  },
+  "transform": {
+    "instance_type": "ml.m5.large",
+    "instance_count": 1,
+    "max_concurrent_transforms": 1,
+    "max_payload_in_mb": 100,
+    "batch_strategy": "SingleRecord",
+    "content_type": "application/jsonlines",
+    "split_type": "Line",
+    "assemble_with": "Line",
+    "accept": "application/json"
+  },
+  "input_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/input/canary_manifest.jsonl",
+  "output_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/",
+  "manifest_line_example": {
+    "input_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy",
+    "output_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/",
+    "mode": "metadata_only",
+    "max_runtime_guard": true
+  },
+  "handler_audit": {
+    "verdict": "HANDLER_CPU_SAFE",
+    "cpu_safe": true,
+    "evidence": "src/fourcastnet/serving/inference.py: torch import guarded (L16-19); device = 'cuda' if torch.cuda.is_available() else 'cpu' (L203-204); map_location=device (L211); .to(device) (L232,235); no hardcoded .cuda()/.to('cuda').",
+    "forward_requires_backend": "predict_fn forward mode needs a FourCastNet backend (modulus/physicsnemo/fourcastnet) via _probe_backend (L92-115); serving/requirements.txt installs only numpy/torch/boto3, so the stock CPU image lacks the backend and forward mode returns ok=false (reason=backend_unavailable) without crashing.",
+    "recommended_route": "JSONL S3-pointer manifest + mode=metadata_only. This loads the tensor from S3, computes metadata, returns ok=true, and does NOT require the backend."
+  },
+  "alternative_raw_npy_route_NOT_recommended_for_first_poc": {
+    "content_type": "application/x-npy",
+    "split_type": "None",
+    "why_not": "input_fn forces mode='forward' for application/x-npy (inference.py L297), which needs the absent backend -> forward_failed. Also routes an 82MB blob through the request payload (latin1 encode path, inference.py L294) which is fragile vs S3-pointer streaming."
+  },
+  "tags": {
+    "Project": "SbnAI-Chucaw",
+    "Component": "FourCastNet",
+    "CostMode": "batch-only",
+    "Owner": "Fabian",
+    "Environment": "dev",
+    "Purpose": "fourcastnet-cpu-batch-transform-poc",
+    "NoEndpoint": "true",
+    "Lifecycle": "finished"
+  },
+  "notes": "CPU-only POC. GPU transform quota is 0; CPU (ml.m5.large) quota exists. The handler is CPU-safe and can reuse the original GPU model's model.tar.gz under a CPU image. For the FIRST canary, use the JSONL metadata_only contract above (matches data/fourcastnet_batch_request_example.jsonl and canary_payloads/canary_manifest.jsonl). DO NOT create the model or run the job as part of repo prep; this config is evidence/preparation only."
+}
