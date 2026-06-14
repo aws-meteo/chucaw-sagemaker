@@ -41,6 +41,16 @@ def parse_args() -> argparse.Namespace:
         default="self-contained",
         help="Layout of model.tar.gz: self-contained (includes code/) or separate-source (no code/)",
     )
+    parser.add_argument(
+        "--requirements-file",
+        default="requirements.txt",
+        help=(
+            "Requirements filename (relative to --serving-dir) to bundle as "
+            "code/requirements.txt. Default 'requirements.txt' (Phase 1 metadata_only "
+            "canary). Use 'requirements-forward.txt' to build a Phase 2 forward-capable "
+            "artifact with the FourCastNet backend."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -76,12 +86,15 @@ def main() -> int:
             print(f"ERROR: Missing required asset: {p}")
             return 1
 
-    required_code = ["inference.py", "requirements.txt"]
+    # inference.py plus the chosen requirements file (bundled as code/requirements.txt).
+    requirements_src = args.requirements_file
+    required_code = ["inference.py", requirements_src]
     for code_file in required_code:
         p = serving_path / code_file
         if not p.exists():
             print(f"ERROR: Missing required serving file: {p}")
             return 1
+    print(f"Requirements file: {requirements_src} (bundled as code/requirements.txt)")
 
     output_path.mkdir(parents=True, exist_ok=True)
     tar_path = output_path / "model.tar.gz"
@@ -101,9 +114,18 @@ def main() -> int:
                 tar.add(assets_path / asset, arcname=asset)
 
             if args.layout == "self-contained":
-                # Add code/ directory and files
-                for code_file in required_code:
-                    tar.add(serving_path / code_file, arcname=f"code/{code_file}")
+                # Add code/ directory and files. The chosen requirements file is always
+                # bundled as code/requirements.txt so SageMaker installs it at startup.
+                tar.add(serving_path / "inference.py", arcname="code/inference.py")
+                tar.add(serving_path / requirements_src, arcname="code/requirements.txt")
+                # Bundle the vendored NVlabs AFNONet backend modules when present so
+                # forward builds can run real inference. They are optional: the Phase-1
+                # metadata_only handler does not import them at module load.
+                for optional in ("afnonet.py", "img_utils.py"):
+                    opt_path = serving_path / optional
+                    if opt_path.exists():
+                        tar.add(opt_path, arcname=f"code/{optional}")
+                        print(f"Bundled optional backend module: code/{optional}")
                 print("Packaged in self-contained mode (includes code/ folder inside model.tar.gz).")
             else:
                 print("Packaged in separate-source mode (model.tar.gz contains assets only).")

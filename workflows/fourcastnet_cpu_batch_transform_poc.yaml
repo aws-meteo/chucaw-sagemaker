@@ -5,10 +5,15 @@ fourcastnet_cpu_batch_transform_poc:
   max_active_runs: 1
 
   tasks:
-    wait_for_input_npy:
+    # JSONL S3-pointer manifest contract (metadata_only canary). Each manifest line
+    # points at a tensor in S3; the handler streams it from S3 and returns stats.
+    # Do NOT use application/x-npy + SplitType: None here: that forces mode=forward in
+    # inference.py input_fn, which needs a FourCastNet backend the stock CPU image lacks
+    # (returns ok=false, reason=backend_unavailable). See configs/fourcastnet_batch_cpu_poc_v1.json.
+    wait_for_input_manifest:
       operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
       bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
-      bucket_key: ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy
+      bucket_key: sagemaker/fourcastnet/fcn-v1/input/canary_manifest.jsonl
       wildcard_match: false
       retries: 0
       poke_interval: 60
@@ -18,7 +23,7 @@ fourcastnet_cpu_batch_transform_poc:
     run_batch_transform:
       operator: airflow.providers.amazon.aws.operators.sagemaker.SageMakerTransformOperator
       dependencies:
-        - wait_for_input_npy
+        - wait_for_input_manifest
       wait_for_completion: false
       check_interval: 60
       retries: 0
@@ -32,12 +37,13 @@ fourcastnet_cpu_batch_transform_poc:
           DataSource:
             S3DataSource:
               S3DataType: S3Prefix
-              S3Uri: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy
-          ContentType: application/x-npy
-          SplitType: None
+              S3Uri: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/input/canary_manifest.jsonl
+          ContentType: application/jsonlines
+          SplitType: Line
         TransformOutput:
           S3OutputPath: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/
           Accept: application/json
+          AssembleWith: Line
         TransformResources:
           InstanceType: ml.m5.large
           InstanceCount: 1
