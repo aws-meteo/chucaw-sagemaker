@@ -26,5 +26,25 @@ def test_build_inference_spec_matches_csv_contract():
     assert container["ModelDataUrl"] == "s3://bucket/path/quicksight_abrupt_model.tar.gz"
     assert container["Environment"]["SAGEMAKER_PROGRAM"] == "inference.py"
     assert container["Environment"]["SAGEMAKER_SUBMIT_DIRECTORY"] == "/opt/ml/model/code"
-    assert spec["SupportedContentTypes"] == ["text/csv", "CSV"]
-    assert spec["SupportedResponseMIMETypes"] == ["text/csv", "CSV"]
+    assert spec["SupportedContentTypes"] == ["text/csv"]
+    assert spec["SupportedResponseMIMETypes"] == ["text/csv"]
+
+
+def test_build_customer_metadata_properties_no_commas():
+    module = _load_register_module()
+    metadata = module.build_customer_metadata_properties()
+
+    assert metadata["Project"] == "chucaw"
+    assert metadata["Component"] == "quicksight-sagemaker-augmentation"
+    assert metadata["ModelKind"] == "csv-abrupt-temperature-classifier"
+    assert metadata["InferenceMode"] == "BatchTransform"
+    assert metadata["EndpointRequired"] == "false"
+
+    # Verify no commas in metadata values
+    for key, value in metadata.items():
+        assert "," not in value, f"Comma found in metadata key {key}: {value}"
+
+    assert "/" in metadata["InputColumns"]
+    assert "/" in metadata["OutputColumns"]
+    assert metadata["InputColumns"] == "lat/lon/t2m"
+    assert metadata["OutputColumns"] == "abrupt_temp_change_label/abrupt_temp_change_score"

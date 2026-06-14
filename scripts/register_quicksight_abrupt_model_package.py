@@ -3,8 +3,11 @@ import argparse
 import sys
 from typing import Any
 
-import boto3
-from botocore.exceptions import ClientError
+try:
+    from botocore.exceptions import ClientError
+except ModuleNotFoundError:  # pragma: no cover - environment dependent
+    class ClientError(Exception):
+        pass
 
 
 DEFAULT_MODEL_PACKAGE_GROUP_NAME = "chucaw-quicksight-abrupt-classifier"
@@ -79,8 +82,20 @@ def build_inference_spec_for_image(image_uri: str, model_artifact_s3_uri: str) -
                 },
             }
         ],
-        "SupportedContentTypes": ["text/csv", "CSV"],
-        "SupportedResponseMIMETypes": ["text/csv", "CSV"],
+        "SupportedContentTypes": ["text/csv"],
+        "SupportedResponseMIMETypes": ["text/csv"],
+    }
+
+
+def build_customer_metadata_properties() -> dict[str, str]:
+    return {
+        "Project": "chucaw",
+        "Component": "quicksight-sagemaker-augmentation",
+        "ModelKind": "csv-abrupt-temperature-classifier",
+        "InputColumns": "lat/lon/t2m",
+        "OutputColumns": "abrupt_temp_change_label/abrupt_temp_change_score",
+        "InferenceMode": "BatchTransform",
+        "EndpointRequired": "false",
     }
 
 
@@ -116,6 +131,12 @@ def _ensure_model_package_group(
 
 
 def main() -> int:
+    try:
+        import boto3
+    except ModuleNotFoundError as exc:
+        print("ERROR: boto3 is required to register SageMaker model packages.", file=sys.stderr)
+        raise SystemExit(1) from exc
+
     args = _parse_args()
     sm_client = boto3.client("sagemaker", region_name=args.region)
     _ensure_model_package_group(
@@ -125,20 +146,13 @@ def main() -> int:
     )
 
     inference_spec = build_inference_spec(args.region, args.sklearn_version, args.model_artifact_s3_uri)
+    customer_metadata_properties = build_customer_metadata_properties()
     response = sm_client.create_model_package(
         ModelPackageGroupName=args.model_package_group_name,
         ModelApprovalStatus=args.approval_status,
         ModelPackageDescription=args.description,
         InferenceSpecification=inference_spec,
-        CustomerMetadataProperties={
-            "Project": "chucaw",
-            "Component": "quicksight-sagemaker-augmentation",
-            "ModelKind": "csv-abrupt-temperature-classifier",
-            "InputColumns": "lat,lon,t2m",
-            "OutputColumns": "abrupt_temp_change_label,abrupt_temp_change_score",
-            "InferenceMode": "BatchTransform",
-            "EndpointRequired": "false",
-        },
+        CustomerMetadataProperties=customer_metadata_properties,
     )
 
     package_arn = response["ModelPackageArn"]

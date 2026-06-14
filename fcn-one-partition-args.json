@@ -1,0 +1,8 @@
+{
+  "--YEAR": "2026",
+  "--MONTH": "06",
+  "--DAY": "01",
+  "--HOUR": "06z",
+  "--ALLOW_INCOMPLETE": "false",
+  "--LATITUDE_POLICY": "fail"
+}

@@ -1,0 +1,75 @@
+fourcastnet_cpu_batch_transform_poc:
+  schedule: null
+  description: "POC SbnAI FourCastNet Batch Transform. No real-time endpoints."
+  max_active_runs: 1
+  start_date: "2026-06-11"
+
+  tasks:
+    wait_for_input_npy:
+      task_id: wait_for_input_npy
+      operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
+      bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
+      bucket_key: ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy
+      wildcard_match: false
+      poke_interval: 60
+      timeout: 600
+      retries: 0
+
+    run_batch_transform:
+      task_id: run_batch_transform
+      operator: airflow.providers.amazon.aws.operators.sagemaker.SageMakerTransformOperator
+      dependencies:
+        - wait_for_input_npy
+      wait_for_completion: false
+      check_interval: 60
+      retries: 0
+      config:
+        TransformJobName: "fourcastnet-cpu-poc-20260606-18z-{{ ts_nodash }}"
+        ModelName: sbnai-fourcastnet-fcn-v1-cpu-poc
+        MaxConcurrentTransforms: 1
+        MaxPayloadInMB: 100
+        BatchStrategy: SingleRecord
+        TransformInput:
+          DataSource:
+            S3DataSource:
+              S3DataType: S3Prefix
+              S3Uri: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy
+          ContentType: application/x-npy
+          SplitType: None
+        TransformOutput:
+          S3OutputPath: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/
+          Accept: application/json
+        TransformResources:
+          InstanceType: ml.m5.large
+          InstanceCount: 1
+        Tags:
+          - Key: Project
+            Value: SbnAI-Chucaw
+          - Key: Purpose
+            Value: fourcastnet-cpu-batch-transform-poc
+          - Key: Environment
+            Value: dev
+          - Key: NoEndpoint
+            Value: "true"
+
+    wait_for_batch_transform:
+      task_id: wait_for_batch_transform
+      operator: airflow.providers.amazon.aws.sensors.sagemaker.SageMakerTransformSensor
+      dependencies:
+        - run_batch_transform
+      job_name: "fourcastnet-cpu-poc-20260606-18z-{{ ts_nodash }}"
+      poke_interval: 60
+      timeout: 3600
+      retries: 0
+
+    verify_output_prefix:
+      task_id: verify_output_prefix
+      operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
+      dependencies:
+        - wait_for_batch_transform
+      bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
+      bucket_key: sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/*
+      wildcard_match: true
+      poke_interval: 60
+      timeout: 600
+      retries: 0

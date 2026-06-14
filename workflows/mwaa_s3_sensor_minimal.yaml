@@ -1,0 +1,11 @@
+mwaa_s3_sensor_minimal:
+  schedule: null
+  start_date: "2026-06-11"
+  tasks:
+    wait_for_input_npy:
+      task_id: wait_for_input_npy
+      operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
+      bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
+      bucket_key: ecmwf/fourcastnet/year=2026/month=06/day=06/hour=18z/20260606180000-0h-oper-fc_tensor.npy
+      wildcard_match: false
+      retries: 0

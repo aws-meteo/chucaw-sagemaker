@@ -13,6 +13,24 @@ SKLEARN_ARTIFACT_TYPE = "sklearn_regressor_v1"
 
 
 def _coerce_grid(grid: Any) -> np.ndarray:
+    """
+    Valida y convierte la estructura del grid a un array de numpy 2D.
+
+    Parameters
+    ----------
+    grid : Any
+        Estructura de coordenadas de entrada.
+
+    Returns
+    -------
+    np.ndarray
+        Array de numpy 2D con forma (n, 2) y tipo float32.
+
+    Raises
+    ------
+    ValueError
+        Si el grid no tiene la forma o dimensiones esperadas.
+    """
     grid_arr = np.asarray(grid, dtype=np.float32)
     if grid_arr.ndim != 2 or grid_arr.shape[1] != 2:
         raise ValueError("Invalid model format: 'grid' must be 2D shape (n, 2)")
@@ -22,6 +40,27 @@ def _coerce_grid(grid: Any) -> np.ndarray:
 
 
 def normalize_artifact(raw_model: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normaliza el artefacto del modelo detectando su tipo y validando su esquema.
+
+    Soporta modelos de búsqueda legados (grid + t2m) y modelos basados en 
+    scikit-learn (estimator + grid).
+
+    Parameters
+    ----------
+    raw_model : Dict[str, Any]
+        Diccionario crudo cargado del archivo del modelo.
+
+    Returns
+    -------
+    Dict[str, Any]
+        Diccionario normalizado con el tipo de artefacto y datos validados.
+
+    Raises
+    ------
+    ValueError
+        Si el formato del modelo no es compatible o faltan datos requeridos.
+    """
     if not isinstance(raw_model, dict):
         raise ValueError("Invalid model format: expected dict artifact")
 
@@ -51,6 +90,9 @@ def normalize_artifact(raw_model: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class BasePredictor(Protocol):
+    """
+    Protocolo base para los predictores del sistema.
+    """
     model_name: str
     model_version: str
     method: str
@@ -58,11 +100,29 @@ class BasePredictor(Protocol):
     target_variable: str
 
     def predict_row(self, latitude: float, longitude: float) -> Dict[str, float]:
+        """
+        Realiza una predicción para un punto geográfico único.
+
+        Parameters
+        ----------
+        latitude : float
+            Latitud del punto.
+        longitude : float
+            Longitud del punto.
+
+        Returns
+        -------
+        Dict[str, float]
+            Resultados de la predicción incluyendo el valor y coordenadas del grid.
+        """
         ...
 
 
 @dataclass
 class KNNPredictor:
+    """
+    Predictor que utiliza el vecino más cercano (o un modelo sklearn) sobre un grid.
+    """
     model: Dict[str, Any]
     model_name: str = "knn_baseline"
     model_version: str = "v1"
@@ -76,10 +136,40 @@ class KNNPredictor:
         self.artifact_type = self.model.get("artifact_type", LEGACY_ARTIFACT_TYPE)
 
     def _nearest_grid_idx(self, latitude: float, longitude: float) -> int:
+        """
+        Encuentra el índice del punto del grid más cercano a las coordenadas dadas.
+
+        Parameters
+        ----------
+        latitude : float
+            Latitud de búsqueda.
+        longitude : float
+            Longitud de búsqueda.
+
+        Returns
+        -------
+        int
+            Índice del punto más cercano en el array del grid.
+        """
         dists = np.sqrt((self.grid[:, 0] - latitude) ** 2 + (self.grid[:, 1] - longitude) ** 2)
         return int(np.argmin(dists))
 
     def predict_row(self, latitude: float, longitude: float) -> Dict[str, float]:
+        """
+        Predice el valor de temperatura para un punto usando búsqueda por grid.
+
+        Parameters
+        ----------
+        latitude : float
+            Latitud.
+        longitude : float
+            Longitud.
+
+        Returns
+        -------
+        Dict[str, float]
+            Valor predicho y coordenadas exactas del punto del grid utilizado.
+        """
         idx = self._nearest_grid_idx(latitude, longitude)
 
         if self.artifact_type == LEGACY_ARTIFACT_TYPE:
@@ -104,6 +194,9 @@ class KNNPredictor:
 
 @dataclass
 class MockPredictor:
+    """
+    Predictor de prueba que devuelve valores deterministas basados en coordenadas.
+    """
     model_name: str = "mock_predictor"
     model_version: str = "v0"
     method: str = "mock_passthrough"
@@ -111,6 +204,21 @@ class MockPredictor:
     target_variable: str = "t"
 
     def predict_row(self, latitude: float, longitude: float) -> Dict[str, float]:
+        """
+        Devuelve un valor de temperatura simulado.
+
+        Parameters
+        ----------
+        latitude : float
+            Latitud.
+        longitude : float
+            Longitud.
+
+        Returns
+        -------
+        Dict[str, float]
+            Valor simulado y coordenadas originales.
+        """
         value = float(273.15 + ((abs(latitude) + abs(longitude)) % 25))
         return {
             "predicted_value": value,
@@ -124,6 +232,28 @@ def load_predictor_from_model_dir(
     model_name: str = "knn_baseline",
     model_version: str = "v1",
 ) -> BasePredictor:
+    """
+    Carga un predictor a partir de un directorio que contiene 'model.joblib'.
+
+    Parameters
+    ----------
+    model_dir : Path
+        Directorio donde se encuentra el artefacto del modelo.
+    model_name : str, opcional
+        Nombre del modelo, por defecto "knn_baseline".
+    model_version : str, opcional
+        Versión del modelo, por defecto "v1".
+
+    Returns
+    -------
+    BasePredictor
+        Instancia de KNNPredictor configurada con el modelo cargado.
+
+    Raises
+    ------
+    FileNotFoundError
+        Si no se encuentra 'model.joblib' en el directorio.
+    """
     model_path = model_dir / "model.joblib"
     if not model_path.exists():
         raise FileNotFoundError(f"model.joblib not found at: {model_path}")
