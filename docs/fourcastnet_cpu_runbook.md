@@ -50,8 +50,21 @@ This work is **phased**. Phase 1 is a hard gate for Phase 2.
    sets `"max_runtime_guard": false`.
 8. `ml.m5.large` (8 GB) is likely too small for a 1GB tensor + model + backend on CPU;
    move to `ml.m5.2xlarge`/`4xlarge`. CPU forward is slow.
-9. The backend package + version must match how `backbone.ckpt` was produced
-   (`load_from_checkpoint`), or the handler falls back to an untrained `model_cls()`.
+9. **Backend identity (resolved).** `backbone.ckpt` is the **NVlabs/FourCastNet**
+   pretrained AFNO backbone (Pathak et al. 2022, BSD-3), shipped with `global_means.npy`
+   + `global_stds.npy` as the standard NVlabs asset triad. The checkpoint is
+   **NVlabs-format, not Modulus/PhysicsNeMo-format**:
+   - `torch.load(...)` → dict keyed `'model_state'` (not `'model_state_dict'`)
+   - weight keys are prefixed `module.` (strip the first 7 chars)
+   - architecture is `AFNONet` (NVlabs `networks/afnonet.py`):
+     `img_size=(720,1440)`, `patch_size=(8,8)`, `in_chans=20`, `out_chans=20`,
+     `embed_dim=768`, `depth=12`
+   Consequently `nvidia-physicsnemo`'s `FourCastNet` class cannot load this checkpoint
+   directly, and the handler's current `_probe_backend` + `load_from_checkpoint` design
+   (which targets Modulus/PhysicsNeMo classes) will not match it — it would fall back to
+   an untrained `model_cls()`. Real forward inference requires vendoring the NVlabs
+   AFNONet network code into the serving bundle (see Phase 2). The only extra pip deps
+   are `timm` + `einops` (already in `requirements-forward.txt`).
 
 ---
 
@@ -132,21 +145,37 @@ container init. **Do not proceed to Phase 2 until this passes.**
 
 ## Phase 2 — real `forward` inference on CPU
 
+> **Prerequisite (handler work).** The shipped `backbone.ckpt` is the NVlabs AFNONet
+> checkpoint (gap #9). The current handler's `_probe_backend`/`load_from_checkpoint`
+> path targets Modulus/PhysicsNeMo classes and will **not** load it, so before Phase 2
+> can prove `fourcastnet_proven=true` the serving handler must gain native AFNONet
+> support:
+> 1. Vendor `networks/afnonet.py` and `utils/img_utils.py` from NVlabs/FourCastNet into
+>    `src/fourcastnet/serving/` (BSD-3 — retain the copyright header).
+> 2. In `inference.py`, add a forward path that builds `AFNONet` with
+>    `img_size=(720,1440), patch_size=(8,8), in_chans=20, out_chans=20, embed_dim=768,
+>    depth=12`, loads `checkpoint['model_state']` with the `module.` prefix stripped,
+>    normalizes the input with `global_means/global_stds` (20-channel order), runs the
+>    forward pass, and denormalizes.
+> `requirements-forward.txt` already pins the needed deps (`timm`, `einops`).
+
 ### 1. Build and upload a forward-capable artifact
 ```bash
 python scripts/package_fourcastnet_model.py \
   --assets-dir <local_assets_dir> \
   --requirements-file requirements-forward.txt \
   --layout self-contained
-# code/requirements.txt now includes the FourCastNet backend (heavier startup)
+# code/requirements.txt now includes timm + einops (heavier startup).
+# NOTE: package_fourcastnet_model.py currently bundles only inference.py + the chosen
+# requirements file. Extend it (small follow-up) to also copy the vendored AFNONet
+# modules (afnonet.py, img_utils.py) into code/ so they ship in model.tar.gz.
 
 aws s3 cp artifacts/fourcastnet/build/model.tar.gz \
   s3://.../sagemaker/fourcastnet/fcn-v1/model/model-forward.tar.gz \
   --profile sbnai-725 --region us-east-1
 ```
 Create a **new** model (e.g. `sbnai-fourcastnet-fcn-v1-cpu-forward`) pointing at the
-forward artifact — keep the canary model intact. Confirm the backend pin in
-`requirements-forward.txt` matches the `backbone.ckpt` provenance first (gap #9).
+forward artifact — keep the canary model intact.
 
 ### 2. Manifest for real inference
 Set `"mode": "forward"` and `"max_runtime_guard": false` (the real tensor exceeds the
