@@ -90,29 +90,20 @@ def _resolve_asset(model_dir: Path, env_key: str, filename: str) -> Path:
 
 
 def _probe_backend() -> dict[str, Any]:
-    probes: list[tuple[str, str]] = [
-        ("modulus.models.fcn", "FourCastNet"),
-        ("modulus.models.fourcastnet", "FourCastNet"),
-        ("physicsnemo.models.fourcastnet", "FourCastNet"),
-        ("fourcastnet", "FourCastNet"),
-    ]
+    """Readiness signal for native forward inference: is the vendored NVlabs AFNONet
+    backend importable (i.e. afnonet.py present and timm/einops installed)?
+
+    This is the Phase-2 stack. The minimal Phase-1 (metadata_only) container ships
+    without timm/einops, so this reports ok=false there — which is expected and does
+    not affect the metadata_only path.
+    """
     attempts: list[dict[str, str]] = []
-    for module_name, attr_name in probes:
-        try:
-            module = __import__(module_name, fromlist=[attr_name])
-            symbol = getattr(module, attr_name, None)
-            if symbol is not None:
-                return _ok(
-                    True,
-                    module=module_name,
-                    symbol=attr_name,
-                    load_error="",
-                    attempts=attempts,
-                )
-            attempts.append({"module": module_name, "error": f"Missing symbol: {attr_name}"})
-        except Exception as exc:
-            attempts.append({"module": module_name, "error": f"{type(exc).__name__}: {exc}"})
-    return _ok(False, reason="fourcastnet_backend_not_found", attempts=attempts)
+    try:
+        _import_afnonet()
+        return _ok(True, backend="afnonet", module="afnonet", symbol="AFNONet", attempts=attempts)
+    except Exception as exc:
+        attempts.append({"module": "afnonet", "error": f"{type(exc).__name__}: {exc}"})
+        return _ok(False, reason="afnonet_backend_unavailable", attempts=attempts)
 
 
 def _device_report() -> dict[str, Any]:
@@ -170,16 +161,106 @@ def _read_stats(path: Path) -> dict[str, Any]:
     return _ok(True, path=str(path), **_tensor_metadata(np.asarray(array)))
 
 
-def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: bool) -> dict[str, Any]:
-    backend = model["backend_probe"]
-    if not backend.get("ok"):
-        return _ok(
-            False,
-            reason="backend_unavailable",
-            backend_probe=backend,
-            fourcastnet_proven=False,
-        )
+class _AFNOParams:
+    """Minimal params object consumed by the vendored NVlabs AFNONet constructor.
 
+    AFNONet reads patch_size / N_in_channels / N_out_channels / num_blocks off this
+    object (overriding the matching constructor kwargs), so they must be present.
+    """
+
+    def __init__(self, patch_size: int, n_in: int, n_out: int, num_blocks: int) -> None:
+        self.patch_size = patch_size
+        self.N_in_channels = n_in
+        self.N_out_channels = n_out
+        self.num_blocks = num_blocks
+
+
+def _forward_params() -> dict[str, int]:
+    """Architecture params for the NVlabs FourCastNet AFNO backbone (backbone.ckpt).
+
+    Defaults match the published backbone (img 720x1440, patch 8, 20 channels,
+    embed_dim 768, depth 12, num_blocks 8). Each is env-overridable for variants.
+    """
+
+    def _int_env(key: str, default: int) -> int:
+        raw = os.getenv(key, "").strip()
+        try:
+            return int(raw) if raw else default
+        except ValueError:
+            return default
+
+    return {
+        "img_h": _int_env("FOURCASTNET_IMG_H", 720),
+        "img_w": _int_env("FOURCASTNET_IMG_W", 1440),
+        "patch_size": _int_env("FOURCASTNET_PATCH_SIZE", 8),
+        "n_channels": _int_env("FOURCASTNET_N_CHANNELS", 20),
+        "embed_dim": _int_env("FOURCASTNET_EMBED_DIM", 768),
+        "depth": _int_env("FOURCASTNET_DEPTH", 12),
+        "num_blocks": _int_env("FOURCASTNET_NUM_BLOCKS", 8),
+    }
+
+
+def _import_afnonet():
+    """Lazy import so the Phase-1 metadata_only container (no timm/einops) is unaffected."""
+    try:
+        from .afnonet import AFNONet  # type: ignore
+    except ImportError:  # flat layout: SageMaker puts code/ on sys.path
+        from afnonet import AFNONet  # type: ignore
+    return AFNONet
+
+
+def _strip_module_prefix(state: dict[str, Any]) -> dict[str, Any]:
+    return {(k[7:] if k.startswith("module.") else k): v for k, v in state.items()}
+
+
+def _load_afnonet(checkpoint_path: str, device: Any, params: dict[str, int]) -> tuple[Any, dict[str, Any]]:
+    AFNONet = _import_afnonet()
+    afno_params = _AFNOParams(
+        patch_size=params["patch_size"],
+        n_in=params["n_channels"],
+        n_out=params["n_channels"],
+        num_blocks=params["num_blocks"],
+    )
+    net = AFNONet(
+        afno_params,
+        img_size=(params["img_h"], params["img_w"]),
+        patch_size=(params["patch_size"], params["patch_size"]),
+        in_chans=params["n_channels"],
+        out_chans=params["n_channels"],
+        embed_dim=params["embed_dim"],
+        depth=params["depth"],
+        num_blocks=params["num_blocks"],
+    )
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+        state, checkpoint_key = checkpoint["model_state"], "model_state"
+    elif isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state, checkpoint_key = checkpoint["model_state_dict"], "model_state_dict"
+    else:
+        state, checkpoint_key = checkpoint, "raw"
+
+    result = net.load_state_dict(_strip_module_prefix(state), strict=False)
+    load_info = {
+        "checkpoint_key": checkpoint_key,
+        "missing_keys": list(getattr(result, "missing_keys", [])),
+        "unexpected_keys": list(getattr(result, "unexpected_keys", [])),
+    }
+    return net, load_info
+
+
+def _load_norm_stats(path: str, n_channels: int) -> np.ndarray:
+    """Load global_means/global_stds as a (1, C, 1, 1) broadcastable array."""
+    arr = np.load(path, allow_pickle=False).astype(np.float32)
+    if arr.ndim == 4 and arr.shape[1] >= n_channels:
+        return arr[:, :n_channels, :1, :1].reshape(1, n_channels, 1, 1)
+    flat = arr.reshape(-1)
+    if flat.size < n_channels:
+        raise ValueError(f"stats file {path} has {flat.size} values, need >= {n_channels}")
+    return flat[:n_channels].reshape(1, n_channels, 1, 1)
+
+
+def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: bool) -> dict[str, Any]:
     if torch is None:
         return _ok(False, reason="torch_not_available", fourcastnet_proven=False)
 
@@ -192,65 +273,61 @@ def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: b
             fourcastnet_proven=False,
         )
 
-    module_name = str(backend.get("module", ""))
-    symbol_name = str(backend.get("symbol", ""))
+    params = _forward_params()
     started = time.time()
-
     try:
-        module = __import__(module_name, fromlist=[symbol_name])
-        model_cls = getattr(module, symbol_name)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        device_name = "cuda" if torch.cuda.is_available() else "cpu"
-        device = torch.device(device_name)
-        checkpoint_path = model["checkpoint_path"]
-
-        load_attempts: list[str] = []
-        instance = None
-        if hasattr(model_cls, "load_from_checkpoint"):
-            try:
-                instance = model_cls.load_from_checkpoint(checkpoint_path, map_location=device)
-                load_attempts.append("load_from_checkpoint(checkpoint_path, map_location=device)")
-            except Exception as exc:
-                load_attempts.append(f"load_from_checkpoint failed: {type(exc).__name__}: {exc}")
-
-        if instance is None:
-            try:
-                instance = model_cls()
-                load_attempts.append("model_cls()")
-            except Exception as exc:
-                load_attempts.append(f"model_cls() failed: {type(exc).__name__}: {exc}")
-
-        if instance is None:
+        arr = np.asarray(tensor, dtype=np.float32)
+        if arr.ndim == 3:
+            arr = arr[np.newaxis, ...]
+        if arr.ndim != 4:
             return _ok(
                 False,
-                reason="backend_model_instantiation_failed",
-                load_attempts=load_attempts,
+                reason="unexpected_input_rank",
                 fourcastnet_proven=False,
+                input_shape=[int(d) for d in np.asarray(tensor).shape],
+            )
+        _, c, h, w = arr.shape
+        if c != params["n_channels"] or h != params["img_h"] or w != params["img_w"]:
+            return _ok(
+                False,
+                reason="input_shape_mismatch",
+                fourcastnet_proven=False,
+                expected=[params["n_channels"], params["img_h"], params["img_w"]],
+                got=[int(c), int(h), int(w)],
+                hint="Set FOURCASTNET_N_CHANNELS/IMG_H/IMG_W to match the checkpoint, or fix the input tensor.",
             )
 
-        instance.eval()
-        instance.to(device)
+        net, load_info = _load_afnonet(model["checkpoint_path"], device, params)
+        net.eval()
+        net.to(device)
 
-        tensor_batch = np.asarray(tensor, dtype=np.float32)
-        input_tensor = torch.from_numpy(tensor_batch).to(device)
+        means = _load_norm_stats(model["global_means_path"], c)
+        stds = _load_norm_stats(model["global_stds_path"], c)
+        normalized = (arr - means) / stds
+
+        input_tensor = torch.from_numpy(normalized.astype(np.float32)).to(device)
         with torch.no_grad():
-            output = instance(input_tensor)
-
-        if hasattr(output, "detach"):
-            out_tensor = output.detach().cpu().numpy()
-        else:
-            out_tensor = np.asarray(output)
+            output = net(input_tensor)
+        out_np = output.detach().cpu().numpy()
+        denormalized = out_np * stds + means
 
         elapsed = time.time() - started
+        # A clean load (no missing keys) is what makes the run trustworthy; a partial
+        # load means some weights stayed at init, so we flag it rather than claim proof.
+        proven = len(load_info["missing_keys"]) == 0
         return _ok(
-            True,
-            fourcastnet_proven=True,
-            input_shape=[int(dim) for dim in tensor_batch.shape],
-            output_shape=[int(dim) for dim in out_tensor.shape],
+            proven,
+            reason=None if proven else "checkpoint_partial_load",
+            fourcastnet_proven=proven,
+            input_shape=[int(d) for d in arr.shape],
+            output_shape=[int(d) for d in out_np.shape],
+            output_stats=_tensor_metadata(denormalized),
             runtime_seconds=elapsed,
-            backend_module=module_name,
-            backend_symbol=symbol_name,
-            load_attempts=load_attempts,
+            architecture="AFNONet",
+            forward_params=params,
+            load_info=load_info,
         )
     except Exception as exc:
         elapsed = time.time() - started
@@ -262,8 +339,7 @@ def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: b
             error_type=type(exc).__name__,
             error_message=str(exc),
             traceback=traceback.format_exc(limit=8),
-            backend_module=module_name,
-            backend_symbol=symbol_name,
+            forward_params=params,
         )
 
 

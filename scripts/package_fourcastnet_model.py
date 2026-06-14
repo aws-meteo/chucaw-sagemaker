@@ -118,6 +118,14 @@ def main() -> int:
                 # bundled as code/requirements.txt so SageMaker installs it at startup.
                 tar.add(serving_path / "inference.py", arcname="code/inference.py")
                 tar.add(serving_path / requirements_src, arcname="code/requirements.txt")
+                # Bundle the vendored NVlabs AFNONet backend modules when present so
+                # forward builds can run real inference. They are optional: the Phase-1
+                # metadata_only handler does not import them at module load.
+                for optional in ("afnonet.py", "img_utils.py"):
+                    opt_path = serving_path / optional
+                    if opt_path.exists():
+                        tar.add(opt_path, arcname=f"code/{optional}")
+                        print(f"Bundled optional backend module: code/{optional}")
                 print("Packaged in self-contained mode (includes code/ folder inside model.tar.gz).")
             else:
                 print("Packaged in separate-source mode (model.tar.gz contains assets only).")
