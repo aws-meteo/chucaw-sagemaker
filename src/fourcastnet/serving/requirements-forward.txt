@@ -1,0 +1,20 @@
+# Phase 2 (forward inference) serving requirements for FourCastNet.
+#
+# This file is the OPT-IN, heavier counterpart to requirements.txt. It is bundled into
+# model.tar.gz only when packaging a forward-capable artifact:
+#
+#   python scripts/package_fourcastnet_model.py \
+#     --requirements-file requirements-forward.txt --layout self-contained
+#
+# Keep the Phase 1 (metadata_only canary) build on the minimal requirements.txt so the
+# cheap canary container starts fast and is not blocked by a heavy/failing backend install.
+numpy>=1.24
+torch>=2.1
+boto3>=1.34
+# FourCastNet backend. inference.py _probe_backend imports one of:
+#   modulus.models.fcn.FourCastNet / modulus.models.fourcastnet.FourCastNet
+#   physicsnemo.models.fourcastnet.FourCastNet / fourcastnet.FourCastNet
+# NVIDIA Modulus was renamed to PhysicsNeMo. The exact package AND version MUST match
+# how backbone.ckpt was produced (load_from_checkpoint), or the handler falls back to an
+# untrained model_cls(). Confirm the checkpoint provenance before relying on this pin.
+nvidia-physicsnemo>=1.0
