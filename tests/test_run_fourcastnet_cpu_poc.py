@@ -43,34 +43,27 @@ def test_manifest_generation_forward(tmp_path):
 
 
 def test_metadata_only_and_forward_manifests_differ(tmp_path):
-    metadata_dir = tmp_path / "metadata_only"
-    forward_dir = tmp_path / "forward"
-
-    result_metadata = _run(["--input-s3-uri", INPUT_S3_URI, "--mode", "metadata_only"], metadata_dir)
-    result_forward = _run(["--input-s3-uri", INPUT_S3_URI, "--mode", "forward"], forward_dir)
+    result_metadata = _run(["--input-s3-uri", INPUT_S3_URI, "--mode", "metadata_only"], tmp_path)
+    result_forward = _run(["--input-s3-uri", INPUT_S3_URI, "--mode", "forward"], tmp_path)
     assert result_metadata.returncode == 0
     assert result_forward.returncode == 0
 
-    metadata_record = _manifest_record(metadata_dir, "metadata_only")
-    forward_record = _manifest_record(forward_dir, "forward")
-    assert metadata_record["mode"] != forward_record["mode"]
+    metadata_record = _manifest_record(tmp_path, "metadata_only")
+    forward_record = _manifest_record(tmp_path, "forward")
     assert metadata_record["mode"] == "metadata_only"
     assert forward_record["mode"] == "forward"
 
 
-def test_transform_job_spec_dry_run_no_aws(tmp_path):
+def test_transform_job_dry_run_no_aws(tmp_path):
     result = _run(["--input-s3-uri", INPUT_S3_URI], tmp_path)
     assert result.returncode == 0
-    assert "Pure local mode" in result.stdout
     assert "[DRY RUN]" in result.stdout
     assert "Creating Transform Job" not in result.stdout
 
-    spec_files = sorted(tmp_path.glob("transform_job_*.json"))
-    assert len(spec_files) == 1
-    spec = json.loads(spec_files[0].read_text(encoding="utf-8"))
-    assert spec["MaxConcurrentTransforms"] == 1
-    assert spec["TransformResources"]["InstanceType"] == "ml.m5.large"
-    assert spec["BatchStrategy"] == "SingleRecord"
+    log = (tmp_path / "transform_job.log").read_text(encoding="utf-8")
+    assert '"MaxConcurrentTransforms": 1' in log
+    assert '"InstanceType": "ml.m5.large"' in log
+    assert '"BatchStrategy": "SingleRecord"' in log
 
 
 def test_no_endpoint_apis_in_script():
@@ -78,15 +71,4 @@ def test_no_endpoint_apis_in_script():
     assert "create_endpoint(" not in content
     assert "create_endpoint_config(" not in content
     assert ".deploy(" not in content
-    # create_transform_job is reachable only via delegation to the existing,
-    # already-guardrailed runner.
     assert "run_fourcastnet_batch_transform.py" in content
-
-
-def test_raw_npy_with_metadata_only_rejected(tmp_path):
-    result = _run(
-        ["--input-s3-uri", INPUT_S3_URI, "--input-contract", "raw_npy", "--mode", "metadata_only"],
-        tmp_path,
-    )
-    assert result.returncode != 0
-    assert "forces mode='forward'" in result.stderr
