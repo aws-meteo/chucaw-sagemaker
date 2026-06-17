@@ -13,21 +13,25 @@
 #     We deliberately OMIT `max_active_runs` and `description` — MWAA Serverless
 #     ignores them and warns on import.
 #   * Only `airflow.providers.amazon.aws.*` operators are used. MWAA Serverless
-#     accepts ONLY the Amazon provider package — these three operators qualify.
-#   * `schedule: null` => manual-run only, never auto-runs (cost-safe posture).
-#   * Jinja IS supported by MWAA Serverless (AWS docs example uses
-#     `{{ ti.xcom_pull(...) }}`). `config` is a template field on
-#     SageMakerTransformOperator, so `{{ ts_nodash }}` renders to a unique,
-#     SageMaker-valid TransformJobName at run time. No manual rename needed.
-#       -> FIXED-NAME FALLBACK: if you ever distrust Jinja in your MWAA build,
-#          replace `{{ ts_nodash }}` with a literal suffix, e.g.
-#          TransformJobName: fcn-batch-20260616-metaonly
-#          WARNING: a literal name MUST be changed before every rerun — SageMaker
-#          rejects a duplicate TransformJobName.
+#     accepts ONLY the Amazon provider package; SageMakerTransformOperator and
+#     S3KeySensor are both on the supported-operators list.
+#   * MANUAL / cost-safe posture is enforced at the WORKFLOW level, NOT by YAML.
+#     You MUST create the workflow with `--trigger-mode MANUAL` (a create-workflow
+#     parameter). `schedule: null` here is only belt-and-suspenders so the DAG has
+#     no schedule even if trigger-mode is ever changed. Do NOT rely on YAML alone
+#     to keep it from auto-running.
+#   * NO Jinja in the job name. MWAA Serverless only renders an allowlisted subset
+#     of macros (see supported-jinja-parameters), and `{{ ts_nodash }}` is NOT
+#     guaranteed to be in it — an unrendered `{{ ... }}` would become a literal,
+#     INVALID SageMaker TransformJobName (braces/spaces) and CreateTransformJob
+#     would raise ValidationException. Instead we use a FIXED base name plus
+#     `action_if_job_exists: timestamp` (the operator's default): on the first run
+#     it uses the base name; on any rerun where the name already exists, the
+#     Amazon provider auto-appends a timestamp to keep it unique. No Jinja, no
+#     manual rename, reruns are safe.
 #   * The operator waits in-line (`wait_for_completion: true`) instead of a
-#     separate SageMakerTransformSensor. This is the MWAA-Serverless-supported
-#     equivalent and avoids re-referencing the templated job name in a second
-#     task (which could mismatch if the sensor's job_name field is not templated).
+#     separate SageMakerTransformSensor — the MWAA-Serverless-supported equivalent,
+#     and it avoids re-referencing the job name in a second task.
 
 fourcastnet_cpu_batch_transform_metadata_only:
   dag_id: fourcastnet_cpu_batch_transform_metadata_only
@@ -55,9 +59,10 @@ fourcastnet_cpu_batch_transform_metadata_only:
       dependencies: [wait_for_input_manifest]
       wait_for_completion: true
       check_interval: 60
+      action_if_job_exists: timestamp
       retries: 0
       config:
-        TransformJobName: "fcn-batch-{{ ts_nodash }}"
+        TransformJobName: fcn-batch-metadata-only
         ModelName: sbnai-fourcastnet-fcn-v1-cpu-poc
         MaxConcurrentTransforms: 1
         MaxPayloadInMB: 100
