@@ -1,0 +1,105 @@
+# FourCastNet CPU Batch Transform — metadata_only canary (Amazon MWAA Serverless)
+#
+# This is a dag-factory 1.0 compatible YAML definition, the format accepted by
+# Amazon MWAA Serverless `create-workflow --definition-s3-location`. It is NOT a
+# Python Airflow DAG and is NOT generic DAG Factory for self-managed MWAA.
+#
+# It reproduces the SAME operation as scripts/run_fourcastnet_cpu_poc.py:
+#   JSONL S3-pointer manifest -> SageMaker Batch Transform (CPU) -> S3 output.
+# No endpoints, no GPU, no real-time inference, no raw .npy TransformInput.
+#
+# Design notes / why this shape is MWAA-Serverless-safe:
+#   * Top-level key == dag_id; only `schedule`, `start_date`, `catchup`, `tasks`.
+#     We deliberately OMIT `max_active_runs` and `description` — MWAA Serverless
+#     ignores them and warns on import.
+#   * Only `airflow.providers.amazon.aws.*` operators are used. MWAA Serverless
+#     accepts ONLY the Amazon provider package — these three operators qualify.
+#   * `schedule: null` => manual-run only, never auto-runs (cost-safe posture).
+#   * Jinja IS supported by MWAA Serverless (AWS docs example uses
+#     `{{ ti.xcom_pull(...) }}`). `config` is a template field on
+#     SageMakerTransformOperator, so `{{ ts_nodash }}` renders to a unique,
+#     SageMaker-valid TransformJobName at run time. No manual rename needed.
+#       -> FIXED-NAME FALLBACK: if you ever distrust Jinja in your MWAA build,
+#          replace `{{ ts_nodash }}` with a literal suffix, e.g.
+#          TransformJobName: fcn-batch-20260616-metaonly
+#          WARNING: a literal name MUST be changed before every rerun — SageMaker
+#          rejects a duplicate TransformJobName.
+#   * The operator waits in-line (`wait_for_completion: true`) instead of a
+#     separate SageMakerTransformSensor. This is the MWAA-Serverless-supported
+#     equivalent and avoids re-referencing the templated job name in a second
+#     task (which could mismatch if the sensor's job_name field is not templated).
+
+fourcastnet_cpu_batch_transform_metadata_only:
+  dag_id: fourcastnet_cpu_batch_transform_metadata_only
+  schedule: null
+  start_date: "2026-06-11"
+  catchup: false
+
+  tasks:
+
+    # 1) Optional precheck: manifest object exists before we pay for compute.
+    wait_for_input_manifest:
+      operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
+      bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
+      bucket_key: sagemaker/fourcastnet/fcn-v1/input/canary_manifest.jsonl
+      wildcard_match: false
+      poke_interval: 30
+      timeout: 600
+      retries: 0
+
+    # 2) Submit the Batch Transform and wait for it to finish in-line.
+    #    JSONL manifest input (NOT raw .npy), ContentType application/jsonlines,
+    #    SplitType Line, one worker, SingleRecord => metadata_only canary.
+    run_batch_transform:
+      operator: airflow.providers.amazon.aws.operators.sagemaker.SageMakerTransformOperator
+      dependencies: [wait_for_input_manifest]
+      wait_for_completion: true
+      check_interval: 60
+      retries: 0
+      config:
+        TransformJobName: "fcn-batch-{{ ts_nodash }}"
+        ModelName: sbnai-fourcastnet-fcn-v1-cpu-poc
+        MaxConcurrentTransforms: 1
+        MaxPayloadInMB: 100
+        BatchStrategy: SingleRecord
+        TransformInput:
+          DataSource:
+            S3DataSource:
+              S3DataType: S3Prefix
+              S3Uri: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/input/canary_manifest.jsonl
+          ContentType: application/jsonlines
+          SplitType: Line
+        TransformOutput:
+          S3OutputPath: s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/
+          Accept: application/json
+          AssembleWith: Line
+        TransformResources:
+          InstanceType: ml.m5.large
+          InstanceCount: 1
+        Tags:
+          - Key: Project
+            Value: SbnAI-Chucaw
+          - Key: Component
+            Value: FourCastNet
+          - Key: CostMode
+            Value: batch-only
+          - Key: Owner
+            Value: Fabian
+          - Key: Environment
+            Value: dev
+          - Key: Purpose
+            Value: fourcastnet-cpu-batch-transform-poc
+          - Key: NoEndpoint
+            Value: "true"
+
+    # 3) Optional postcheck: output prefix received at least one object
+    #    (SageMaker <manifest>.out and/or per-record inference_report_*.json).
+    verify_output_prefix:
+      operator: airflow.providers.amazon.aws.sensors.s3.S3KeySensor
+      dependencies: [run_batch_transform]
+      bucket_name: chucaw-data-platinum-processed-725644097028-us-east-1-an
+      bucket_key: sagemaker/batch-transform/fourcastnet-poc/2026-06-06-18z/*
+      wildcard_match: true
+      poke_interval: 30
+      timeout: 600
+      retries: 0
