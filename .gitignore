@@ -15,3 +15,12 @@ __pycache__/
 .graphify_*.json
 fcn_debug/
 graphify-out/*
+.serena/
+dryrun_*.txt
+*_output/
+*_success_report.json
+probe.json
+.pytest_cache/
+*_payload.json
+artifact_*.txt
+
