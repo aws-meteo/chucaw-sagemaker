@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,54 @@ DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "fourcastnet" / "cpu_poc"
 RUN_BATCH_TRANSFORM = REPO_ROOT / "scripts" / "run_fourcastnet_batch_transform.py"
 DESCRIBE_OR_CREATE_MODEL = REPO_ROOT / "scripts" / "describe_or_create_fourcastnet_model.py"
 CHECK_NO_ENDPOINTS = REPO_ROOT / "scripts" / "check_no_fourcastnet_endpoints.py"
+
+# Derived manifests/outputs live under the same bucket as the input tensor.
+MANIFEST_PREFIX = "sagemaker/fourcastnet/fcn-v1/input"
+OUTPUT_PREFIX = "sagemaker/batch-transform/fourcastnet-poc"
+
+
+def parse_run_metadata(input_s3_uri: str) -> dict[str, str]:
+    """Pull bucket + Hive-style partitions + lead_hours out of a tensor S3 URI.
+
+    Example:
+      s3://BUCKET/ecmwf/fourcastnet/year=2026/month=06/day=13/hour=06z/
+      20260613060000-24h-oper-fc_tensor.npy
+    """
+    if not input_s3_uri.startswith("s3://"):
+        raise ValueError(f"input URI must start with s3:// , got: {input_s3_uri}")
+    bucket, _, key = input_s3_uri[len("s3://"):].partition("/")
+    parts = {p.split("=", 1)[0]: p.split("=", 1)[1] for p in key.split("/") if "=" in p}
+    for field in ("year", "month", "day", "hour"):
+        if field not in parts:
+            raise ValueError(f"missing {field}= partition in: {input_s3_uri}")
+    filename = key.rsplit("/", 1)[-1]
+    m = re.search(r"-(\d+)h-", filename)  # e.g. ...-24h-oper-...
+    if not m:
+        raise ValueError(f"cannot parse lead hours (-NNh-) from filename: {filename}")
+    return {
+        "bucket": bucket,
+        "year": parts["year"],
+        "month": parts["month"],
+        "day": parts["day"],
+        "hour": parts["hour"],
+        "filename": filename,
+        "lead_hours": m.group(1),
+    }
+
+
+def _partition_suffix(meta: dict[str, str]) -> str:
+    return (
+        f"year={meta['year']}/month={meta['month']}/day={meta['day']}/"
+        f"hour={meta['hour']}/lead_hours={meta['lead_hours']}"
+    )
+
+
+def derive_manifest_s3_uri(meta: dict[str, str], mode: str) -> str:
+    return f"s3://{meta['bucket']}/{MANIFEST_PREFIX}/{_partition_suffix(meta)}/{mode}_manifest.jsonl"
+
+
+def derive_output_s3_uri(meta: dict[str, str]) -> str:
+    return f"s3://{meta['bucket']}/{OUTPUT_PREFIX}/{_partition_suffix(meta)}/"
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,8 +95,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--artifacts-dir", default=str(DEFAULT_ARTIFACTS_DIR))
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to CPU POC model config JSON")
+    parser.add_argument("--model-name", default="", help="Override model name from config")
     parser.add_argument("--create-model", action="store_true", help="Describe/create the CPU POC model")
-    parser.add_argument("--upload-manifest", action="store_true", help="Upload the manifest to --manifest-s3-uri")
+    parser.add_argument("--upload-manifest", action="store_true", help="Upload the manifest to its S3 URI")
     parser.add_argument("--execute", action="store_true", help="Actually create the Batch Transform job")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--profile", default="sbnai-725")
@@ -68,9 +118,16 @@ def main() -> int:
     args = parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     transform = config["transform"]
+    model_name = args.model_name or config["model_name"]
 
-    output_s3_uri = args.output_s3_uri or config["output_s3_uri"]
-    manifest_s3_uri = args.manifest_s3_uri or config["input_s3_uri"]
+    # Derive everything from the requested input tensor so the job actually uses it.
+    meta = parse_run_metadata(args.input_s3_uri)
+    output_s3_uri = args.output_s3_uri or derive_output_s3_uri(meta)
+    manifest_s3_uri = args.manifest_s3_uri or derive_manifest_s3_uri(meta, args.mode)
+    job_name_prefix = (
+        f"fcn-poc-{args.mode}-{meta['year']}-{meta['month']}-{meta['day']}"
+        f"-{meta['hour']}-{meta['lead_hours']}h"
+    )
 
     artifacts_dir = Path(args.artifacts_dir)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -81,10 +138,19 @@ def main() -> int:
         "output_s3_uri": output_s3_uri,
         "max_runtime_guard": args.max_runtime_guard,
     }
-    manifest_path = artifacts_dir / f"{args.mode}_canary_manifest.jsonl"
+    manifest_path = artifacts_dir / f"{args.mode}_manifest.jsonl"
     manifest_line = json.dumps(manifest)
     manifest_path.write_text(manifest_line + "\n", encoding="utf-8")
-    print(f"Wrote manifest: {manifest_path}\n{manifest_line}")
+
+    print("=== Planned run ===")
+    print(f"input tensor URI:    {args.input_s3_uri}")
+    print(f"local manifest path: {manifest_path}")
+    print(f"manifest S3 URI:     {manifest_s3_uri}")
+    print(f"output S3 URI:       {output_s3_uri}")
+    print(f"mode:                {args.mode}")
+    print(f"max_runtime_guard:   {args.max_runtime_guard}")
+    print(f"transform job name:  {job_name_prefix}-<utc-timestamp>")
+    print(f"manifest line:       {manifest_line}")
 
     needs_aws = args.create_model or args.upload_manifest or args.execute
     if needs_aws:
@@ -112,7 +178,7 @@ def main() -> int:
             if result.returncode != 0:
                 return result.returncode
 
-        if args.upload_manifest:
+        if args.upload_manifest or args.execute:
             print("\n=== Upload manifest ===")
             print("Command:", f"aws s3 cp {manifest_path} {manifest_s3_uri}")
             try:
@@ -131,9 +197,10 @@ def main() -> int:
     cmd = [
         sys.executable, str(RUN_BATCH_TRANSFORM),
         "--config", args.config,
-        "--model-name", config["model_name"],
+        "--model-name", model_name,
         "--input-s3-uri", manifest_s3_uri,
         "--output-s3-uri", output_s3_uri,
+        "--job-name-prefix", job_name_prefix,
         "--instance-type", str(transform["instance_type"]),
         "--instance-count", str(transform["instance_count"]),
         "--max-concurrent-transforms", str(transform["max_concurrent_transforms"]),
