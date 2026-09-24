@@ -21,6 +21,15 @@ except Exception:  # pragma: no cover - defensive runtime fallback
 
 MAX_GUARD_ELEMENTS = 50_000_000
 
+# Canonical 20-channel FourCastNet/Chucaw order.  Never reorder.
+CHANNEL_NAMES: list[str] = [
+    "u10", "v10", "t2m", "sp", "msl",
+    "t850", "u1000", "v1000", "z1000",
+    "u850", "v850", "z850",
+    "u500", "v500", "z500", "t500",
+    "z50", "r500", "r850", "tcwv",
+]
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -68,6 +77,18 @@ def _write_json_to_s3(uri: str, payload: dict[str, Any]) -> str:
     body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
     s3 = boto3.client("s3")
     s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    return f"s3://{bucket}/{key}"
+
+
+def _write_npy_to_s3(uri: str, array: np.ndarray) -> str:
+    """Write a numpy array as .npy to the given S3 URI.  Returns the final URI."""
+    boto3 = _ensure_boto3()
+    bucket, key = _split_s3_uri(uri)
+    buf = io.BytesIO()
+    np.save(buf, array, allow_pickle=False)
+    buf.seek(0)
+    s3 = boto3.client("s3")
+    s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue(), ContentType="application/octet-stream")
     return f"s3://{bucket}/{key}"
 
 
@@ -139,6 +160,42 @@ def _tensor_metadata(array: np.ndarray) -> dict[str, Any]:
         "mean": float(np.nanmean(array)),
         "std": float(np.nanstd(array)),
     }
+
+
+def _channel_wise_stats(
+    array: np.ndarray, channel_names: list[str]
+) -> list[dict[str, Any]]:
+    """Per-channel statistics for a [1, C, H, W] tensor.
+
+    Returns one record per channel with name, shape, finite, nan_count,
+    min, max, mean, std.  If *channel_names* is shorter than C, remaining
+    channels get name="unknown_<i>".
+    """
+    if array.ndim == 4:
+        arr = array[0]          # -> [C, H, W]
+    elif array.ndim == 3:
+        arr = array             # already [C, H, W]
+    else:
+        raise ValueError(f"Expected 3-D or 4-D array, got ndim={array.ndim}")
+
+    c = arr.shape[0]
+    records: list[dict[str, Any]] = []
+    for i in range(c):
+        ch = arr[i]             # [H, W]
+        name = channel_names[i] if i < len(channel_names) else f"unknown_{i}"
+        records.append({
+            "index": i,
+            "name": name,
+            "dtype": str(ch.dtype),
+            "shape": [int(d) for d in ch.shape],
+            "finite": bool(np.isfinite(ch).all()),
+            "nan_count": int(np.isnan(ch).sum()),
+            "min": float(np.nanmin(ch)),
+            "max": float(np.nanmax(ch)),
+            "mean": float(np.nanmean(ch)),
+            "std": float(np.nanstd(ch)),
+        })
+    return records
 
 
 def _load_input_tensor(input_data: dict[str, Any]) -> np.ndarray:
@@ -249,15 +306,26 @@ def _load_afnonet(checkpoint_path: str, device: Any, params: dict[str, int]) -> 
     return net, load_info
 
 
-def _load_norm_stats(path: str, n_channels: int) -> np.ndarray:
-    """Load global_means/global_stds as a (1, C, 1, 1) broadcastable array."""
+def _load_norm_stats(path: str, n_channels: int) -> tuple[np.ndarray, dict[str, Any]]:
+    """Load global_means/global_stds as a (1, C, 1, 1) broadcastable array.
+
+    Returns (array, info) where info contains the raw channel count and
+    whether extra channels were ignored (21 vs 20).
+    """
     arr = np.load(path, allow_pickle=False).astype(np.float32)
+    raw_channels = arr.reshape(-1).size if arr.ndim < 4 else int(arr.shape[1])
+    info: dict[str, Any] = {
+        "normalization_stats_channels": raw_channels,
+        "model_channels": n_channels,
+    }
+    if raw_channels > n_channels:
+        info["normalization_stats_extra_channels_ignored"] = True
     if arr.ndim == 4 and arr.shape[1] >= n_channels:
-        return arr[:, :n_channels, :1, :1].reshape(1, n_channels, 1, 1)
+        return arr[:, :n_channels, :1, :1].reshape(1, n_channels, 1, 1), info
     flat = arr.reshape(-1)
     if flat.size < n_channels:
         raise ValueError(f"stats file {path} has {flat.size} values, need >= {n_channels}")
-    return flat[:n_channels].reshape(1, n_channels, 1, 1)
+    return flat[:n_channels].reshape(1, n_channels, 1, 1), info
 
 
 def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: bool) -> dict[str, Any]:
@@ -303,8 +371,8 @@ def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: b
         net.eval()
         net.to(device)
 
-        means = _load_norm_stats(model["global_means_path"], c)
-        stds = _load_norm_stats(model["global_stds_path"], c)
+        means, means_info = _load_norm_stats(model["global_means_path"], c)
+        stds, stds_info = _load_norm_stats(model["global_stds_path"], c)
         normalized = (arr - means) / stds
 
         input_tensor = torch.from_numpy(normalized.astype(np.float32)).to(device)
@@ -317,7 +385,10 @@ def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: b
         # A clean load (no missing keys) is what makes the run trustworthy; a partial
         # load means some weights stayed at init, so we flag it rather than claim proof.
         proven = len(load_info["missing_keys"]) == 0
-        return _ok(
+
+        channel_names = CHANNEL_NAMES[:c]
+
+        result = _ok(
             proven,
             reason=None if proven else "checkpoint_partial_load",
             fourcastnet_proven=proven,
@@ -328,7 +399,17 @@ def _attempt_forward(model: dict[str, Any], tensor: np.ndarray, runtime_guard: b
             architecture="AFNONet",
             forward_params=params,
             load_info=load_info,
+            channel_names=channel_names,
+            channel_count=int(c),
+            input_channel_stats=_channel_wise_stats(arr, channel_names),
+            output_channel_stats=_channel_wise_stats(denormalized, channel_names),
+            normalization_info={"means": means_info, "stds": stds_info},
         )
+
+        # Attach denormalized output for optional tensor writing by predict_fn.
+        result["_denormalized"] = denormalized
+
+        return result
     except Exception as exc:
         elapsed = time.time() - started
         return _ok(
@@ -399,6 +480,8 @@ def input_fn(request_body: Any, request_content_type: str = "application/json") 
         "max_runtime_guard": bool(payload.get("max_runtime_guard", True)),
         "input_s3_uri": str(payload.get("input_s3_uri", "")).strip(),
         "output_s3_uri": str(payload.get("output_s3_uri", "")).strip(),
+        "write_output_tensor": bool(payload.get("write_output_tensor", False)),
+        "output_tensor_s3_uri": str(payload.get("output_tensor_s3_uri", "")).strip(),
     }
 
 
@@ -437,10 +520,47 @@ def predict_fn(input_data: dict[str, Any], model: dict[str, Any]) -> dict[str, A
             report["result"] = "metadata_collected"
         else:
             forward = _attempt_forward(model, tensor, runtime_guard=bool(input_data.get("max_runtime_guard", True)))
+
+            # Extract the denormalized tensor before stripping from the report.
+            denormalized = forward.pop("_denormalized", None)
+
             report["forward"] = forward
             report["ok"] = bool(forward.get("ok"))
             report["fourcastnet_proven"] = bool(forward.get("fourcastnet_proven", False))
             report["result"] = "forward_succeeded" if report["ok"] else "forward_failed"
+
+            # --- Optional forecast tensor S3 write (default off) ---
+            # When write_output_tensor=true, the tensor write is part of the
+            # success contract: forward succeeding but the write failing (or no
+            # URI to write to) demotes top-level ok to false. forward.ok and
+            # forward.fourcastnet_proven are NOT touched — the forward still ran.
+            write_tensor = bool(input_data.get("write_output_tensor", False))
+            report["output_tensor_written"] = False
+            if write_tensor and report["ok"]:
+                tensor_uri = str(input_data.get("output_tensor_s3_uri", "")).strip()
+                if not tensor_uri:
+                    output_base = str(input_data.get("output_s3_uri", "")).strip().rstrip("/")
+                    tensor_uri = f"{output_base}/forecast_tensor.npy" if output_base else ""
+
+                write_error: str | None = None
+                if denormalized is None:
+                    write_error = "no_denormalized_tensor"
+                elif not tensor_uri:
+                    write_error = "no_output_tensor_s3_uri_and_no_output_s3_uri_fallback"
+                else:
+                    try:
+                        _write_npy_to_s3(tensor_uri, denormalized)
+                        report["output_tensor_written"] = True
+                        report["output_tensor_s3_uri"] = tensor_uri
+                        report["output_tensor_shape"] = [int(d) for d in denormalized.shape]
+                        report["output_tensor_dtype"] = str(denormalized.dtype)
+                    except Exception as exc:
+                        write_error = f"{type(exc).__name__}: {exc}"
+
+                if not report["output_tensor_written"]:
+                    report["output_tensor_write_error"] = write_error
+                    report["ok"] = False
+                    report["result"] = "forward_succeeded_tensor_write_failed"
     except Exception as exc:
         report["ok"] = False
         report["result"] = "prediction_failed"
