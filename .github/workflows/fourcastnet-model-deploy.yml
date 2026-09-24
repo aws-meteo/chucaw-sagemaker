@@ -1,0 +1,105 @@
+name: FourCastNet model deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fourcastnet-model-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  MODEL_CONFIG: configs/fourcastnet_batch_cpu_forward_v2.json
+  MODEL_NAME_PREFIX: sbnai-fourcastnet-fcn-v1-cpu-forward
+  MODEL_S3_PREFIX: ${{ secrets.FCN_MODEL_S3_PREFIX || 's3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/model' }}
+  ASSETS_S3_URI: ${{ secrets.FCN_ASSETS_S3_URI }}
+  TEST_INPUT_S3_URI: ${{ secrets.FCN_TEST_INPUT_S3_URI || 's3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=13/hour=06z/20260613060000-24h-oper-fc_tensor.npy' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install boto3 numpy pytest
+      - name: Run source guardrails
+        run: |
+          python -m pytest \
+            tests/test_run_fourcastnet_cpu_poc.py \
+            tests/test_channel_stats_and_tensor_write.py \
+            tests/test_run_fourcastnet_batch_transform.py \
+            tests/test_github_workflow_guardrails.py
+
+  deploy-model:
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install deploy dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install boto3 numpy
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Print cost mode
+        run: |
+          echo "Expected cost mode: batch-only"
+          echo "This deploy uploads a model artifact and creates a SageMaker Model metadata record."
+          echo "It does not create endpoints and does not execute Batch Transform."
+      - name: Preflight before AWS writes
+        run: |
+          python scripts/check_no_sagemaker_always_on_compute.py --region "$AWS_REGION"
+          python scripts/check_no_fourcastnet_endpoints.py --region "$AWS_REGION"
+      - name: Download model assets
+        run: |
+          test -n "$ASSETS_S3_URI"
+          mkdir -p artifacts/fourcastnet/assets
+          aws s3 cp "$ASSETS_S3_URI" artifacts/fourcastnet/assets --recursive --region "$AWS_REGION"
+      - name: Package model
+        run: |
+          python scripts/package_fourcastnet_model.py \
+            --assets-dir "$GITHUB_WORKSPACE/artifacts/fourcastnet/assets" \
+            --requirements-file requirements-forward.txt \
+            --layout self-contained
+      - name: Upload versioned model artifact
+        run: |
+          MODEL_DATA_URL="${MODEL_S3_PREFIX%/}/model-${GITHUB_SHA}.tar.gz"
+          aws s3 cp artifacts/fourcastnet/build/model.tar.gz "$MODEL_DATA_URL" --region "$AWS_REGION"
+          echo "MODEL_DATA_URL=$MODEL_DATA_URL" >> "$GITHUB_ENV"
+      - name: Create SageMaker Model
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          MODEL_NAME="${MODEL_NAME_PREFIX}-${SHORT_SHA}"
+          python scripts/describe_or_create_fourcastnet_model.py \
+            --config "$MODEL_CONFIG" \
+            --model-name "$MODEL_NAME" \
+            --model-data-url "$MODEL_DATA_URL" \
+            --region "$AWS_REGION"
+          echo "MODEL_NAME=$MODEL_NAME" >> "$GITHUB_ENV"
+      - name: Validate transform command as dry run
+        run: |
+          python scripts/run_fourcastnet_cpu_poc.py \
+            --config "$MODEL_CONFIG" \
+            --model-name "$MODEL_NAME" \
+            --mode forward \
+            --input-s3-uri "$TEST_INPUT_S3_URI" \
+            --no-max-runtime-guard \
+            --region "$AWS_REGION"
