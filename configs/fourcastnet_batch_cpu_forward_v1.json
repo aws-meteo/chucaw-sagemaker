@@ -1,0 +1,41 @@
+{
+  "model_name": "sbnai-fourcastnet-fcn-v1-cpu-forward",
+  "source_model_name": "sbnai-fourcastnet-fcn-v1",
+  "model_data_url": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/model/model-forward.tar.gz",
+  "image_uri": "763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-inference:2.1.0-cpu-py310",
+  "execution_role_arn": "arn:aws:iam::725644097028:role/service-role/AmazonSageMakerAdminIAMExecutionRole",
+  "container_environment": {
+    "SAGEMAKER_PROGRAM": "inference.py",
+    "SAGEMAKER_SUBMIT_DIRECTORY": "/opt/ml/model/code"
+  },
+  "transform": {
+    "instance_type": "ml.m5.2xlarge",
+    "instance_count": 1,
+    "max_concurrent_transforms": 1,
+    "max_payload_in_mb": 100,
+    "batch_strategy": "SingleRecord",
+    "content_type": "application/jsonlines",
+    "split_type": "Line",
+    "assemble_with": "Line",
+    "accept": "application/json"
+  },
+  "input_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/fourcastnet/fcn-v1/input/forward_manifest.jsonl",
+  "output_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/forward/",
+  "manifest_line_example": {
+    "input_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/ecmwf/fourcastnet/year=2026/month=06/day=13/hour=06z/20260613060000-24h-oper-fc_tensor.npy",
+    "output_s3_uri": "s3://chucaw-data-platinum-processed-725644097028-us-east-1-an/sagemaker/batch-transform/fourcastnet-poc/year=2026/month=06/day=13/hour=06z/lead_hours=24/",
+    "mode": "forward",
+    "max_runtime_guard": false
+  },
+  "phase2_notes": "Phase 2 forward-capable artifact. Uses model-forward.tar.gz (bundles code/afnonet.py + code/img_utils.py + code/requirements.txt with timm+einops) so inference.py runs native NVlabs AFNONet forward. Distinct from the Phase-1 metadata_only artifact (model.tar.gz) and model (sbnai-fourcastnet-fcn-v1-cpu-poc), which stays intact. Forward needs mode=forward and max_runtime_guard=false (the real ~1GB tensor exceeds the 50M-element guard), on a larger CPU instance (ml.m5.2xlarge) since ml.m5.large is too small for tensor+model+backend. CPU forward is slow.",
+  "tags": {
+    "Project": "SbnAI-Chucaw",
+    "Component": "FourCastNet",
+    "CostMode": "batch-only",
+    "Owner": "Fabian",
+    "Environment": "dev",
+    "Purpose": "fourcastnet-cpu-batch-transform-forward",
+    "NoEndpoint": "true",
+    "Lifecycle": "active"
+  }
+}
